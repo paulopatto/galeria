@@ -1,5 +1,5 @@
 source 'https://rubygems.org'
 gem 'activerecord', '~> 4.2.x', require: 'active_record'
-gem 'pg'
+gem 'pg', '~> 0.18.x'
 gem 'sinatra-activerecord'
 gem 'rake'
