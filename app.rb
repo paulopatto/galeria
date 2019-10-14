@@ -4,6 +4,8 @@ require 'active_record'
 require_relative 'models/image'
 require_relative 'config/environments'
 
+enable :sessions
+
 get '/' do
   @images = Image.all
   erb :index
