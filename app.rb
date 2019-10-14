@@ -1,5 +1,6 @@
 require 'sinatra'
 require 'bundler'
+enable :sessions
 
 id_counter = 1
 images = []
