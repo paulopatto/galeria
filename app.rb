@@ -5,6 +5,13 @@ require 'aws-sdk'
 require_relative 'models/image'
 require_relative 'config/environments'
 
+enable :sessions
+
+get '/' do
+  @images = Image.all
+  erb :index
+end
+
 post '/' do
   if params[:file]
     file       = params[:file][:tempfile]
