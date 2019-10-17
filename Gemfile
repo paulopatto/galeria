@@ -1,5 +1,6 @@
 source 'https://rubygems.org'
 gem 'sinatra', '~> 2.0.X'
+gem 'memory_profiler'
 
 group :development do
   gem 'pry-byebug'
