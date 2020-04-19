@@ -15,3 +15,8 @@ com Elastic BeanStalk por exemplo.
 - 1. Instalar dependencias: `bundle install`
 - 2. Chamar a linha de comando para rodar o servidor rack: `PORT=9000 bundle exec rackup ./config.ru -p $PORT`
 - 3. Acesse http://localhost:9000/
+
+### Via docker V1.0
+
+Construa com: `docker build --tag galeria:1.0`
+Execute com: `docker run --publish 9000:9000 --name galeria-web galeria:1.0`
