@@ -15,3 +15,6 @@ group :test do
   gem 'rack-test', '~> 1.1.0'
 end
 
+group :production do
+  gem 'foreman'
+end
