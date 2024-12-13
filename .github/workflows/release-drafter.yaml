@@ -48,7 +48,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5.6.1
         with:
-          images: ${{ secrets.DOCKER_HUB_USERNAME }}/${{ vars.DOCKER_HUB_IMAGE_NAME }}
+          images: ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.DOCKERHUB_IMAGE_NAME }}
           tags: |
             type=schedule
             type=ref,event=branch
@@ -63,18 +63,18 @@ jobs:
         with:
           context: .
           load: true
-          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/${{ vars.DOCKER_HUB_IMAGE_NAME }}:release-candidate
+          tags: ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.DOCKERHUB_IMAGE_NAME }}:release-candidate
 
       - name: Test image before push
         run: |
-          docker run --rm ${{ secrets.DOCKER_HUB_USERNAME }}/${{ vars.DOCKER_HUB_IMAGE_NAME }}:release-candidate
+          docker run --rm ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.DOCKERHUB_IMAGE_NAME }}:release-candidate
 
       - name: Build and push version
         uses: docker/build-push-action@v6
         with:
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/${{ vars.DOCKER_HUB_IMAGE_NAME }}:${{ steps.release-drafter.outputs.tag_name }}
+          tags: ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.DOCKERHUB_IMAGE_NAME }}:${{ steps.release-drafter.outputs.tag_name }}
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Build and push latest
@@ -82,5 +82,5 @@ jobs:
         with:
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/${{ vars.DOCKER_HUB_IMAGE_NAME }}:latest
+          tags: ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.DOCKERHUB_IMAGE_NAME }}:latest
           labels: ${{ steps.meta.outputs.labels }}
