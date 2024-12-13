@@ -12,6 +12,9 @@ on:
 permissions:
   contents: read
 
+env:
+  ENVIRONMENT: production
+
 jobs:
   update_release_draft:
     name: Generate Release version by release-drafter
