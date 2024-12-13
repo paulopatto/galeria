@@ -12,9 +12,6 @@ on:
 permissions:
   contents: read
 
-env:
-  ENVIRONMENT: production
-
 jobs:
   update_release_draft:
     name: Generate Release version by release-drafter
@@ -30,6 +27,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   generate_docker_image_and_push_to_dockerhub:
+    environment: production
     name: Generate docker image and publish
     needs: update_release_draft
     permissions:
