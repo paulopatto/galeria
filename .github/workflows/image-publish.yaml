@@ -12,7 +12,6 @@ on:
 
 
 jobs:
-
   generate_docker_image_and_push_to_ghcr:
      name: "Build package to Github Container Registry"
     environment: production
@@ -83,9 +82,8 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
           push: true
 
-
   generate_docker_image_and_push_to_dockerhub:
-     name: "Build package to Docker.io"
+    name: "Build package to Docker.io"
     environment: production
     permissions:
       contents: write
