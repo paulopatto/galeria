@@ -15,10 +15,10 @@ permissions:
 jobs:
   update_release_draft:
     name: Generate Release version by release-drafter
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
-    runs-on: ubuntu-latest
     steps:
       - uses: release-drafter/release-drafter@v6
         with:
