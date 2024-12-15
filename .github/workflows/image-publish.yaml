@@ -12,7 +12,7 @@ on:
 
 jobs:
   generate_docker_image_and_push_to_ghcr:
-     name: "Build package to Github Container Registry"
+    name: "Build package to Github Container Registry"
     environment: production
     permissions:
       contents: write
@@ -36,7 +36,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
 
       - name: Extract release tag
         id: extract_release_tag
