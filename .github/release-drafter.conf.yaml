@@ -4,43 +4,43 @@ tag-template: 'v$RESOLVED_VERSION'
 categories:
   - title: '✨ Features'
     labels:
-      - 'pr:feat'
-      - 'pr:breaking-change'
+      - 'feat'
+      - 'breaking-change' # Or keep 'pr:breaking-change if you prefer prefixed labels for this one.
   - title: '🐞 Bug Fixes'
     labels:
-      - 'pr:fix'
+      - 'fix'
   - title: '🔧 Maintenance'
-    label: 
-      - 'pr:chore'
-      - 'pr:refactor'
-      - 'pr:build'
-      - 'pr:ci'
-      - 'pr:docs'
-      - 'pr:style'
-      - 'pr:revert'
-      - 'pr:test'
-      - 'pr:perf'
+    labels:
+      - 'chore'
+      - 'refactor'
+      - 'build'
+      - 'ci'
+      - 'docs'
+      - 'style'
+      - 'revert'
+      - 'test'
+      - 'perf'
 change-template: '- $TITLE @$AUTHOR (#$NUMBER)'
 change-title-escapes: '\<*_&' # You can add # and @ to disable mentions, and add ` to disable code blocks.
 version-resolver:
   major:
     labels:
-      - 'pr:breaking-change'
+      - 'breaking-change'
   minor:
     labels:
-      - 'pr:feat'
+      - 'feat'
   patch:
     labels:
-      - 'pr:fix'
-      - 'pr:chore'
-      - 'pr:refactor'
-      - 'pr:build'
-      - 'pr:ci'
-      - 'pr:docs'
-      - 'pr:style'
-      - 'pr:revert'
-      - 'pr:test'
-      - 'pr:perf'
+      - 'fix'
+      - 'chore'
+      - 'refactor'
+      - 'build'
+      - 'ci'
+      - 'docs'
+      - 'style'
+      - 'revert'
+      - 'test'
+      - 'perf'
       
   default: patch
 template: |
