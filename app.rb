@@ -1,5 +1,6 @@
-require 'sinatra'
 require 'bundler'
+require 'sinatra'
+
 enable :sessions
 
 id_counter = 1
@@ -24,4 +25,12 @@ end
 get '/photo/:id' do
   @image = images.select { |img| img[:id] == params[:id].to_i }.first
   erb :single
+end
+
+get '/docs' do
+  send_file 'docs.html'
+end
+
+get '/swagger.yaml' do
+  send_file 'swagger.yaml'
 end

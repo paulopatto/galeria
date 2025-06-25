@@ -1,0 +1,47 @@
+openapi: 3.0.3
+info:
+  title: Galeria API
+  version: "latest"
+  description: API para exemplificar um galeria com Unspleash
+  license:
+    name: MIT
+    url: http://opensource.org/licenses/MIT
+servers:
+  - url: http://localhost:4567
+
+paths:
+  /:
+    get:
+      summary: Lista todas as imagens
+      responses:
+        '200':
+          description: Lista de imagens
+          content:
+            text/html:
+              schema:
+                type: string
+    post:
+      summary: Adiciona uma nova imagem aleatória
+      responses:
+        '302':
+          description: Redireciona para a página inicial após adicionar
+
+  /photo/{id}:
+    get:
+      summary: Exibe uma imagem específica
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ID da imagem
+      responses:
+        '200':
+          description: Página da imagem
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Imagem não encontrada
