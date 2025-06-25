@@ -19,5 +19,4 @@ end
 
 
 puts 'Meassuring metrics ...'
-require 'pry'; binding.pry
-# memory_report.pretty_print(scale_bytes: true)
+memory_report.pretty_print(scale_bytes: true)

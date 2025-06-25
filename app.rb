@@ -47,7 +47,7 @@ end
 
 get '/fibonacci' do
   start_time = Time.now
-  num = params['num'].to_i || 50
+  num = params['num'].to_i || 7
   f = ->(x){ x < 2 ? x : f[x-1] + f[x-2] }
 
   fib = f.(num)
