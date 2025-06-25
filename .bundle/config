@@ -1,0 +1,3 @@
+---
+BUNDLE_BUILD__THRIFT: --with-cppflags=-Wno-compound-token-split-by-macro
+
