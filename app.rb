@@ -1,6 +1,10 @@
-require 'sinatra'
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
 require 'bundler'
+require 'sinatra'
 require 'memory_profiler'
+
 enable :sessions
 
 id_counter = 1
@@ -42,18 +46,23 @@ get '/metrics' do
   end
 
   "Mem usage: #{memory_report.total_allocated_memsize / 1024 / 1024}Mb"
-
 end
 
 get '/fibonacci' do
   start_time = Time.now
   num = params['num'].to_i || 7
-  f = ->(x){ x < 2 ? x : f[x-1] + f[x-2] }
+  f = ->(x) { x < 2 ? x : f[x - 1] + f[x - 2] }
 
-  fib = f.(num)
+  fib = f.call(num)
   total_time = (((Time.now - start_time) % 3600) % 60).to_i
-  "Fibonacci: #{fib.to_s} <br /> Time: #{total_time} seconds. at #{Time.now.to_time}"
+  "Fibonacci: #{fib} <br /> Time: #{total_time} seconds. at #{Time.now.to_time}"
 end
 
-def metrics
+get '/docs' do
+  send_file 'docs.html'
 end
+
+get '/swagger.yaml' do
+  send_file 'swagger.yaml'
+end
+
