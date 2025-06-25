@@ -1,7 +1,14 @@
 require 'bundler'
 require 'sinatra'
+require './otel-middleware'
+
+if %w[development test].include?(ENV['RACK_ENV'] || 'development')
+  require 'dotenv'
+  Dotenv.load
+end
 
 enable :sessions
+use OpenTelemetryMiddleware
 
 id_counter = 1
 images = []
