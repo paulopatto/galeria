@@ -45,3 +45,33 @@ paths:
                 type: string
         '404':
           description: Imagem não encontrada
+
+  /memory:
+    get:
+      summary: Mostra o uso de memória ao processar um arquivo grande
+      responses:
+        '200':
+          description: Relatório de uso de memória em MB
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /fibonacci:
+    get:
+      summary: Calcula o número de Fibonacci informado
+      parameters:
+        - name: num
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 7
+          description: Número para calcular o Fibonacci
+      responses:
+        '200':
+          description: Resultado do cálculo de Fibonacci e tempo de execução
+          content:
+            text/html:
+              schema:
+                type: string

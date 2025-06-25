@@ -31,7 +31,7 @@ get '/photo/:id' do
   erb :single
 end
 
-get '/metrics' do
+get '/memory' do
   memory_report = MemoryProfiler.report do
     start_time = Time.now
     puts 'Loading ...'
