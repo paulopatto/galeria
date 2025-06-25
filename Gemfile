@@ -6,8 +6,8 @@ group :development do
 end
 
 group :test, :development do
-  # gem 'dotenv', '~> 2.7.X'
-  gem 'thin', '1.2.7'
+  gem 'dotenv', '~> 2.7.X'
+  gem 'thin', '2.0.1'
 end
 
 group :test do
