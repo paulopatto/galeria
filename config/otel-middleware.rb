@@ -1,11 +1,18 @@
 require 'opentelemetry/sdk'
+require 'opentelemetry-exporter-otlp'
+require 'opentelemetry/exporter/jaeger'
+require 'opentelemetry/instrumentation/all'
+
 # Export traces to console by default
 ENV['OTEL_TRACES_EXPORTER'] ||= 'console'
 
 # configure SDK with defaults
 OpenTelemetry::SDK.configure do |config|
+  config.use 'OpenTelemetry::Instrumentation::Rack'
+  config.use 'OpenTelemetry::Instrumentation::Sinatra'
+
   config.service_name = ENV['SERVICE_NAME'] || 'galeria-service'
-  config.use_all() # enables all instrumentation!
+  # config.use_all() # enables all instrumentation!
 end
 
 class OpenTelemetryMiddleware
