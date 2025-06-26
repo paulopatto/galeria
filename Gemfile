@@ -1,6 +1,14 @@
 source 'https://rubygems.org'
 gem 'sinatra', '~> 2.0.X'
 
+# OTEL
+gem 'opentelemetry-common'
+gem 'opentelemetry-sdk'
+gem 'opentelemetry-instrumentation-all'
+gem 'opentelemetry-exporter-otlp'
+gem 'opentelemetry-exporter-jaeger'
+gem "opentelemetry-exporter-zipkin", "~> 0.22.0"
+
 group :development do
   gem 'pry-byebug'
 end
@@ -18,3 +26,5 @@ end
 group :production do
   gem 'foreman'
 end
+
+
