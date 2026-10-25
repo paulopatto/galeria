@@ -284,8 +284,30 @@ jobs:
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OPENCODE_CONFIG: ${{ github.workspace }}/opencode.json
+          OPENCODE_DISABLE_AUTOUPDATE: 'true'
+          OPENCODE_DISABLE_MODELS_FETCH: 'true'
         run: |
-          "$RUNNER_TEMP/opencode/opencode" run \
+          "$RUNNER_TEMP/opencode/opencode" serve --hostname 127.0.0.1 --port 4096 > "$RUNNER_TEMP/opencode-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          server_ready=false
+          for attempt in $(seq 1 30); do
+            if curl -fsS --max-time 1 http://127.0.0.1:4096/global/health > /dev/null 2>&1; then
+              server_ready=true
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo '::error::OpenCode server exited before becoming healthy.'
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$server_ready" != true ]; then
+            echo '::error::OpenCode server did not become healthy within 30 seconds.'
+            exit 1
+          fi
+          echo 'OpenCode: local server is healthy'
+          "$RUNNER_TEMP/opencode/opencode" run --attach http://127.0.0.1:4096 --dir "$GITHUB_WORKSPACE" \
             'Revise o diff completo do SHA em CODE_REVIEW_HEAD_SHA conforme o perfil code-reviewer. Considere os resultados de testes, SAST e dependências anexados. Diferencie dívida preexistente de regressões. Use bash com command e description quando necessário. A resposta final deve ser somente o JSON de decisão definido no perfil, sem Markdown externo. Não altere código nem publique comentários ou reviews.' \
             --model opencode/big-pickle --agent code-reviewer --format json \
             --file "$RUNNER_TEMP/code-review-evidence/ci-context.json" \
