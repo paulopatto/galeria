@@ -8,6 +8,14 @@ com Elastic BeanStalk por exemplo.
 
 ------
 
+## Desenvolvimento com agentes de IA
+
+Consulte o [AGENTS.md](AGENTS.md) para arquitetura, comandos e convenções do
+projeto. A pasta [.agents/](.agents/README.md) contém skills de planejamento,
+implementação, TDD e revisão adaptadas de Matt Pocock, uma skill Ruby/Sinatra
+e perfis de desenvolvimento, testes e revisão. A origem e a licença das
+adaptações estão documentadas em [.agents/SOURCES.md](.agents/SOURCES.md).
+
 ## Como executar esse projeto
 
 ### Desenvolvimento
