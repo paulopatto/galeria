@@ -210,6 +210,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: write
+      issues: write
     env:
       CODE_REVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       CODE_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -315,9 +316,10 @@ jobs:
             const requestText = JSON.stringify(request);
             const promptBytes = Buffer.byteLength(requestText, 'utf8');
             if (promptBytes > 100000) throw new Error('Review input exceeds 100 KB. Split the PR or use manual review; no automatic approval.');
-            const fingerprint = crypto.createHash('sha256').update('one-pass-v1\n' + requestText).digest('hex');
+            const fingerprint = crypto.createHash('sha256').update('client-one-pass-v1\n' + requestText).digest('hex');
             const metadata = { fingerprint, model: request.model, prompt_bytes: promptBytes,
-              diff_bytes: Buffer.byteLength(diff, 'utf8'), cache_hit: false };
+              diff_bytes: Buffer.byteLength(diff, 'utf8'), cache_hit: false,
+              model_steps_limit: 1, output_token_limit: 2000, action_timeout_seconds: 120 };
             const reviews = await github.paginate(github.rest.pulls.listReviews, {
               ...context.repo, pull_number: context.payload.pull_request.number, per_page: 100
             });
@@ -339,60 +341,52 @@ jobs:
             fs.writeFileSync(path.join(directory, 'request.json'), requestText);
             fs.writeFileSync(path.join(directory, 'review-metadata.json'), JSON.stringify(metadata, null, 2));
             core.setOutput('cache_hit', String(metadata.cache_hit));
+            core.setOutput('prompt', request.messages[1].content);
+            if (metadata.cache_hit) fs.writeFileSync(path.join(directory, 'usage.json'), JSON.stringify({ model_rounds: 0, cache_hit: true }));
             core.info(`Review input: ${promptBytes} bytes; reused decision: ${metadata.cache_hit}.`);
-      - name: Review once with bounded response
+      - name: Review once with OpenCode client
         if: steps.prepare.outputs.cache_hit != 'true'
         timeout-minutes: 2
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: opencode/big-pickle
+          agent: code-reviewer
+          use_github_token: true
+          share: false
+          prompt: ${{ steps.prepare.outputs.prompt }}
+      - name: Ensure review did not modify tracked files
+        if: steps.prepare.outputs.cache_hit != 'true'
+        run: git diff --exit-code
+      - name: Extract structured review
+        if: steps.prepare.outputs.cache_hit != 'true'
+        id: extract
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
         with:
           script: |
             const fs = require('fs');
             const path = require('path');
-            const directory = path.join(process.env.RUNNER_TEMP, 'code-review-evidence');
-            const key = process.env.OPENCODE_API_KEY;
-            if (!key) throw new Error('Configure OPENCODE_API_KEY to run the review.');
-            const request = fs.readFileSync(path.join(directory, 'request.json'), 'utf8');
-            const started = Date.now();
-            let response;
-            try {
-              response = await fetch('https://opencode.ai/zen/v1/chat/completions', {
-                method: 'POST', signal: AbortSignal.timeout(90000),
-                headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-                body: request
-              });
-              const payload = await response.json();
-              if (!response.ok) {
-                const message = String(payload.error?.message || '').replaceAll(key, '[redacted]').slice(0, 300);
-                throw new Error(`OpenCode Zen HTTP ${response.status}: ${message}`);
-              }
-              const choice = payload.choices?.[0];
-              if (!choice || choice.finish_reason !== 'stop' || choice.message?.tool_calls?.length) {
-                throw new Error('Review response is missing, truncated or requested a tool. No automatic approval.');
-              }
-              const text = choice.message?.content;
-              if (typeof text !== 'string') throw new Error('Review did not return JSON text.');
-              const report = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
-              fs.writeFileSync(path.join(directory, 'decision.json'), JSON.stringify(report, null, 2));
-              const usage = { requests: 1, elapsed_ms: Date.now() - started,
-                input_tokens: payload.usage?.prompt_tokens ?? null,
-                output_tokens: payload.usage?.completion_tokens ?? null,
-                total_tokens: payload.usage?.total_tokens ?? null };
-              fs.writeFileSync(path.join(directory, 'usage.json'), JSON.stringify(usage, null, 2));
-              core.info(`Review: one request, ${usage.elapsed_ms} ms, input tokens=${usage.input_tokens}, output tokens=${usage.output_tokens}.`);
-            } catch (error) {
-              if (error.name === 'TimeoutError' || error.name === 'AbortError') {
-                throw new Error('OpenCode Zen exceeded 90 seconds. No retry or automatic approval was performed.');
-              }
-              throw error;
-            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo, issue_number: context.payload.pull_request.number, per_page: 100
+            });
+            const marker = `/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const candidates = comments.filter(comment => comment.user?.login === 'github-actions[bot]' &&
+              comment.body?.includes(marker + ')')).sort((a, b) => b.updated_at.localeCompare(a.updated_at) || b.id - a.id);
+            if (!candidates.length) throw new Error('OpenCode did not publish a decision for this workflow run.');
+            const text = candidates[0].body.split(/\n+\[github run\]\(/)[0].trim()
+              .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+            const report = JSON.parse(text);
+            fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'code-review-evidence', 'decision.json'), JSON.stringify(report, null, 2));
+            core.setOutput('comment_id', String(candidates[0].id));
       - name: Publish formal review decision
         id: publish
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
         env:
           CODE_REVIEW_DECISION_PATH: ${{ runner.temp }}/code-review-evidence/decision.json
           CI_RESULTS_JSON: ${{ toJSON(needs) }}
+          REVIEW_COMMENT_ID: ${{ steps.extract.outputs.comment_id }}
         with:
           script: |
             const fs = require('fs');
@@ -450,6 +444,11 @@ jobs:
               core.info(`Formal review submitted: ${event} for ${expectedSha}`);
             } else {
               core.info(`Reused review ${metadata.review_id}; no model call or duplicate review.`);
+            }
+            if (process.env.REVIEW_COMMENT_ID) {
+              try {
+                await github.rest.issues.deleteComment({ ...context.repo, comment_id: Number(process.env.REVIEW_COMMENT_ID) });
+              } catch (_) { core.warning('Formal review published; temporary comment cleanup failed.'); }
             }
             core.setOutput('event', event);
             core.setOutput('analysis_complete', String(report.analysis_complete));

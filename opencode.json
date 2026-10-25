@@ -7,12 +7,30 @@
       "mode": "primary",
       "prompt": "{file:./.agents/agents/code-reviewer.md}",
       "permission": {
-        "edit": "deny",
-        "bash": "allow",
-        "webfetch": "allow",
-        "task": "deny"
+        "*": "deny"
+      },
+      "steps": 1,
+      "temperature": 0,
+      "tools": {
+        "*": false
       }
     }
   },
-  "share": "disabled"
+  "share": "disabled",
+  "provider": {
+    "opencode": {
+      "options": {
+        "timeout": 90000
+      },
+      "models": {
+        "big-pickle": {
+          "limit": {
+            "context": 200000,
+            "input": 160000,
+            "output": 2000
+          }
+        }
+      }
+    }
+  }
 }

@@ -51,31 +51,40 @@ O workflow de testes em push da `master` e por acionamento manual continua
 separado. O workflow antigo de review é substituído pelo pipeline para evitar
 revisões duplicadas. Alterações no título do PR também disparam a validação.
 
-## Revisão em uma chamada, com orçamento explícito
+## Revisão curta com orçamento explícito
 
-A revisão automática usa o mesmo modelo **Big Pickle**, pela API oficial
-OpenCode Zen (`/zen/v1/chat/completions`) e o secret `OPENCODE_API_KEY` existente.
-O [perfil curto](../.agents/agents/code-reviewer.md) é enviado uma única vez como
-instrução de sistema, acompanhado do diff e de um resumo determinístico do CI.
-Não há CLI, sessões, ferramentas, navegação, scanners repetidos, delegação,
-conversa com comentários anteriores ou comentários temporários para extrair JSON.
+O modelo continua sendo **Big Pickle**, usando a action oficial do OpenCode e o
+secret `OPENCODE_API_KEY` existente. O serviço restringe o uso gratuito ao cliente
+OpenCode; a API direta retornou 429 e não é usada pelo pipeline.
 
-- **Uma chamada por revisão nova**, sem tentativas automáticas.
-- **90 segundos** para resposta completa; o passo do Actions limita-se a dois minutos.
-- **2.000 tokens de saída** solicitados ao provedor. Resposta truncada não é aceita.
-- **100 KB de entrada UTF-8**, sem truncar o diff silenciosamente. PRs que excedam
-  o orçamento devem ser divididos ou revisados manualmente; não são autoaprovados.
-- O modelo recebe contagens de testes e somente falhas/pendências, achados SAST e
-  dependências introduzidas. Até dez detalhes por categoria; contagens e omissões
-  são explícitas. Todos os cenários e resultados completos continuam nos artefatos.
+O [perfil curto](../.agents/agents/code-reviewer.md) recebe o diff e o resumo do
+CI. Em [opencode.json](../opencode.json), `steps: 1` limita o agente a uma rodada
+de análise, todas as ferramentas estão desativadas e nenhuma permissão de
+shell, leitura adicional, navegação, edição ou delegação é concedida. O agente
+não repete scanners nem consome comentários anteriores como evidência.
+
+- **Uma rodada do agente principal**, sem ciclos de ferramentas.
+- **Dois minutos** para toda a action, em vez de dez. O timeout configurado do
+  provedor é de 90 segundos; eventuais retries internos ficam dentro do teto global.
+- **2.000 tokens de saída** no limite do modelo. JSON incompleto não é aceito.
+- **100 KB de contexto preparado pelo pipeline**, sem truncar o diff silenciosamente.
+  PRs maiores devem ser divididos ou revisados manualmente; não são autoaprovados.
+- Contagens de testes e somente falhas/pendências, achados SAST e dependências
+  introduzidas são enviados. Até dez detalhes por categoria; contagens e omissões
+  são explícitas. Os resultados completos permanecem nos artefatos.
 - `Gemfile.lock` fica fora do prompt: sua análise pertence ao job de dependências.
   Os demais arquivos de texto alterados continuam no diff completo enviado.
-- `usage.json` registra tempo, quantidade de requisições e tokens informados pelo
-  provedor; `review-metadata.json` registra tamanho da entrada e uso do cache.
 
-O prazo e o limite de saída não garantem disponibilidade do provedor nem um custo
-fixo. O uso real é medido quando a API o informa. Timeout, erro HTTP, resposta
-inválida ou truncada falham a revisão sem retry e sem aprovação por fallback.
+A action pode incluir metadados/histórico do PR e fazer operações internas de sessão;
+`steps: 1` não promete exatamente uma requisição de rede. O limite de 100 KB vale
+para o contexto montado pelo workflow, não para todo o protocolo do cliente.
+O uso efetivo de tokens é consultado no OpenCode; o workflow registra orçamento,
+tamanho de entrada e acerto de cache em `review-metadata.json`.
+
+O pipeline extrai apenas o JSON publicado pelo bot para a execução atual, valida
+o schema e publica um review legível. Remove a resposta estruturada temporária
+após sucesso. Timeout, falha do cliente ou JSON inválido falham sem aprovação por
+fallback. Não há uma segunda análise programada pelo workflow.
 
 ### Reutilização sem nova análise
 
@@ -109,7 +118,7 @@ Uma análise incompleta ou pedido de alterações reprova o `PR gate`.
 
 1. Cadastre o repository secret `OPENCODE_API_KEY`, com acesso ao Big Pickle.
 2. Permita as actions referenciadas no pipeline, incluindo `actions/github-script`,
-   `ruby/setup-ruby`, release-drafter e Dorny.
+   `ruby/setup-ruby`, `anomalyco/opencode/github`, release-drafter e Dorny.
 3. Em **Settings → Actions → General → Workflow permissions**, habilite
    **Allow GitHub Actions to create and approve pull requests**, se permitido
    pela organização. O job de review usa `pull-requests: write`.
@@ -118,9 +127,10 @@ Uma análise incompleta ou pedido de alterações reprova o `PR gate`.
    esse resultado consolidado. Configure depois da primeira execução do novo check.
 
 Testes e scanners ficam em jobs isolados, sem `OPENCODE_API_KEY`. O job do modelo
-não executa scripts ou testes do PR nem instala seu bundle. A requisição HTTPS
-não recebe token GitHub: usa apenas a API key do provedor. A escrita em PRs é
-usada pelo passo separado de publicação; o job não tem permissão para push.
+não executa scripts ou testes do PR nem instala seu bundle. A action usa o token GitHub para a resposta temporária e o passo separado
+publica o review formal. O modelo não possui ferramentas para acessar o token
+ou o ambiente; o job não tem permissão para push. Nenhum script do PR é executado
+com as credenciais do provedor.
 Checkout não persiste credenciais. A configuração mantém leitura de código;
 a escrita em PRs fica nos jobs de classificação e de publicação de review.
 
@@ -134,7 +144,7 @@ checkout de código do contribuidor para contornar essa restrição.
 - `pr-test-reports`: JSON/JUnit com todos os testes, inclusive falhas e pendências.
 - `pr-sast-reports`: JSON do Semgrep.
 - `pr-dependency-reports`: alterações de dependências e vulnerabilidades detectadas.
-- `code-review-evidence-<PR>-<tentativa>`: contexto compacto, diff, requisição sem credenciais, decisão e métricas,
+- `code-review-evidence-<PR>-<tentativa>`: contexto compacto, diff, requisição sem credenciais, decisão e orçamento/cache,
   com retenção de sete dias. Não publique tokens, sessões ou dados pessoais.
 
 A revisão automática não executa scanners opcionais nem Playwright. Verificações
