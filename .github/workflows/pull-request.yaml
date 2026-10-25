@@ -62,6 +62,8 @@ jobs:
         run: |
           mkdir -p tmp/test-results
           bundle exec rspec --format documentation --format json --out tmp/test-results/rspec.json
+      - name: Validate automated review fallback workflow
+        run: node script/verify_review_fallback.js
       - name: Generate JUnit report
         if: ${{ !cancelled() && hashFiles('tmp/test-results/rspec.json') != '' }}
         run: bundle exec ruby script/rspec_to_junit.rb tmp/test-results/rspec.json tmp/test-results/rspec.xml
@@ -205,7 +207,7 @@ jobs:
           github.actor != 'dependabot[bot]' &&
           github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-22.04
-    timeout-minutes: 6
+    timeout-minutes: 5
     permissions:
       contents: read
       actions: read
@@ -217,6 +219,8 @@ jobs:
     outputs:
       event: ${{ steps.publish.outputs.event }}
       analysis_complete: ${{ steps.publish.outputs.analysis_complete }}
+      review_required: ${{ steps.scope.outputs.review_required }}
+      review_reason: ${{ steps.scope.outputs.review_reason }}
     steps:
       - name: Prepare review directories
         run: mkdir -p "$RUNNER_TEMP/code-review-evidence" "$RUNNER_TEMP/ci-reports"
@@ -288,12 +292,46 @@ jobs:
               missing_reports: Object.entries(reports).filter(([, value]) => value.unavailable).map(([file]) => file)
             };
             fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'code-review-evidence', 'ci-context.json'), JSON.stringify(contextReport, null, 2));
-      - name: Prepare exact diff
+      - name: Select reviewable changes and prepare diff
+        id: scope
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: git diff --no-ext-diff "$BASE_SHA...$CODE_REVIEW_HEAD_SHA" -- . ':(exclude)Gemfile.lock' > "$RUNNER_TEMP/code-review-evidence/pr.diff"
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execFileSync } = require('child_process');
+            const range = `${process.env.BASE_SHA}...${process.env.CODE_REVIEW_HEAD_SHA}`;
+            const changed = execFileSync('git', ['diff', '--name-only', range], { encoding: 'utf8' })
+              .split('\n').filter(Boolean);
+            const reviewable = filename =>
+              filename === 'app.rb' || filename === 'config.ru' || filename === 'Gemfile' ||
+              filename === 'Dockerfile' || filename === 'Procfile' || filename === 'Makefile' ||
+              filename === 'generate-pack.sh' || filename === 'swagger.yaml' || filename === 'opencode.json' ||
+              filename.startsWith('.github/') || filename.startsWith('.agents/agents/') ||
+              filename.startsWith('config/') || filename.startsWith('views/') ||
+              filename.startsWith('script/') || filename.startsWith('spec/') ||
+              (filename.startsWith('public/') && /\.(css|js)$/.test(filename)) ||
+              /\.(rb|ru|erb)$/.test(filename);
+            const selected = changed.filter(reviewable);
+            const changedMetadata = Object.keys(context.payload.changes || {});
+            const metadataOnly = context.payload.action === 'edited' && changedMetadata.length > 0 &&
+              changedMetadata.every(key => ['title', 'body'].includes(key));
+            const required = !metadataOnly && selected.length > 0;
+            const directory = path.join(process.env.RUNNER_TEMP, 'code-review-evidence');
+            const diff = required ? execFileSync('git', ['diff', '--no-ext-diff', range, '--', ...selected], { encoding: 'utf8' }) : '';
+            fs.writeFileSync(path.join(directory, 'pr.diff'), diff);
+            const reason = metadataOnly ? 'metadata-only' : selected.length ? 'reviewable-changes' : 'no-reviewable-files';
+            fs.writeFileSync(path.join(directory, 'review-scope.json'), JSON.stringify({
+              required, reason, changed_files: changed, reviewable_files: selected
+            }, null, 2));
+            core.setOutput('review_required', String(required));
+            core.setOutput('review_reason', reason);
+            core.info(`AI review required: ${required}; reason: ${reason}; reviewable files: ${selected.length}.`);
       - name: Prepare bounded review and reuse previous decision
         id: prepare
+        if: steps.scope.outputs.review_required == 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -306,9 +344,15 @@ jobs:
             const policy = fs.readFileSync('.agents/agents/code-reviewer.md', 'utf8');
             const ci = JSON.parse(fs.readFileSync(path.join(directory, 'ci-context.json'), 'utf8'));
             const diff = fs.readFileSync(path.join(directory, 'pr.diff'), 'utf8');
+            const models = [
+              'opencode/big-pickle',
+              'opencode/beam-free',
+              'opencode-go/deepseek-v4.1-flash',
+              'opencode-go/gpt-6-luna'
+            ];
             const input = { commit_sha: process.env.CODE_REVIEW_HEAD_SHA,
               base_sha: process.env.BASE_SHA, verification: ci, diff };
-            const request = { model: 'big-pickle', temperature: 0, max_tokens: 2000,
+            const request = { strategy: 'fallback-v1', models, temperature: 0, max_tokens: 2000,
               response_format: { type: 'json_object' }, messages: [
                 { role: 'system', content: policy },
                 { role: 'user', content: JSON.stringify(input) }
@@ -316,10 +360,10 @@ jobs:
             const requestText = JSON.stringify(request);
             const promptBytes = Buffer.byteLength(requestText, 'utf8');
             if (promptBytes > 100000) throw new Error('Review input exceeds 100 KB. Split the PR or use manual review; no automatic approval.');
-            const fingerprint = crypto.createHash('sha256').update('client-one-pass-v1\n' + requestText).digest('hex');
-            const metadata = { fingerprint, model: request.model, prompt_bytes: promptBytes,
+            const fingerprint = crypto.createHash('sha256').update('fallback-v1\n' + requestText).digest('hex');
+            const metadata = { fingerprint, models, prompt_bytes: promptBytes,
               diff_bytes: Buffer.byteLength(diff, 'utf8'), cache_hit: false,
-              model_steps_limit: 1, output_token_limit: 2000, action_timeout_seconds: 120 };
+              model_steps_limit: 1, output_token_limit: 2000, action_timeout_seconds: 60 };
             const reviews = await github.paginate(github.rest.pulls.listReviews, {
               ...context.repo, pull_number: context.payload.pull_request.number, per_page: 100
             });
@@ -344,9 +388,11 @@ jobs:
             core.setOutput('prompt', request.messages[1].content);
             if (metadata.cache_hit) fs.writeFileSync(path.join(directory, 'usage.json'), JSON.stringify({ model_rounds: 0, cache_hit: true }));
             core.info(`Review input: ${promptBytes} bytes; reused decision: ${metadata.cache_hit}.`);
-      - name: Review once with OpenCode client
-        if: steps.prepare.outputs.cache_hit != 'true'
-        timeout-minutes: 2
+      - name: Review with Big Pickle
+        id: big_pickle
+        if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 1
         uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
@@ -357,36 +403,143 @@ jobs:
           use_github_token: true
           share: false
           prompt: ${{ steps.prepare.outputs.prompt }}
-      - name: Ensure review did not modify tracked files
-        if: steps.prepare.outputs.cache_hit != 'true'
-        run: git diff --exit-code
-      - name: Extract structured review
-        if: steps.prepare.outputs.cache_hit != 'true'
-        id: extract
+      - name: Validate Big Pickle output
+        id: big_pickle_output
+        if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
+        uses: ./.github/actions/validate-review-output
+        with:
+          model: opencode/big-pickle
+          action-outcome: ${{ steps.big_pickle.outcome }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          evidence-directory: ${{ runner.temp }}/code-review-evidence
+      - name: Review with Beam Free
+        id: beam_free
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 1
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: opencode/beam-free
+          agent: code-reviewer
+          use_github_token: true
+          share: false
+          prompt: ${{ steps.prepare.outputs.prompt }}
+      - name: Validate Beam Free output
+        id: beam_free_output
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' }}
+        uses: ./.github/actions/validate-review-output
+        with:
+          model: opencode/beam-free
+          action-outcome: ${{ steps.beam_free.outcome }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          evidence-directory: ${{ runner.temp }}/code-review-evidence
+      - name: Review with DeepSeek V4.1 Flash
+        id: deepseek
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' && steps.beam_free_output.outputs.valid != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 1
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: opencode-go/deepseek-v4.1-flash
+          agent: code-reviewer
+          use_github_token: true
+          share: false
+          prompt: ${{ steps.prepare.outputs.prompt }}
+      - name: Validate DeepSeek V4.1 Flash output
+        id: deepseek_output
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' && steps.beam_free_output.outputs.valid != 'true' }}
+        uses: ./.github/actions/validate-review-output
+        with:
+          model: opencode-go/deepseek-v4.1-flash
+          action-outcome: ${{ steps.deepseek.outcome }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          evidence-directory: ${{ runner.temp }}/code-review-evidence
+      - name: Review with GPT-6 Luna
+        id: gpt_luna
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' && steps.beam_free_output.outputs.valid != 'true' &&
+              steps.deepseek_output.outputs.valid != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 1
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: opencode-go/gpt-6-luna
+          agent: code-reviewer
+          use_github_token: true
+          share: false
+          prompt: ${{ steps.prepare.outputs.prompt }}
+      - name: Validate GPT-6 Luna output
+        id: gpt_luna_output
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' && steps.beam_free_output.outputs.valid != 'true' &&
+              steps.deepseek_output.outputs.valid != 'true' }}
+        uses: ./.github/actions/validate-review-output
+        with:
+          model: opencode-go/gpt-6-luna
+          action-outcome: ${{ steps.gpt_luna.outcome }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          evidence-directory: ${{ runner.temp }}/code-review-evidence
+      - name: Require one valid review decision
+        if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
         with:
           script: |
             const fs = require('fs');
             const path = require('path');
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              ...context.repo, issue_number: context.payload.pull_request.number, per_page: 100
-            });
-            const marker = `/actions/runs/${process.env.GITHUB_RUN_ID}`;
-            const candidates = comments.filter(comment => comment.user?.login === 'github-actions[bot]' &&
-              comment.body?.includes(marker + ')')).sort((a, b) => b.updated_at.localeCompare(a.updated_at) || b.id - a.id);
-            if (!candidates.length) throw new Error('OpenCode did not publish a decision for this workflow run.');
-            const text = candidates[0].body.split(/\n+\[github run\]\(/)[0].trim()
-              .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-            const report = JSON.parse(text);
-            fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'code-review-evidence', 'decision.json'), JSON.stringify(report, null, 2));
-            core.setOutput('comment_id', String(candidates[0].id));
+            const directory = path.join(process.env.RUNNER_TEMP, 'code-review-evidence');
+            if (!fs.existsSync(path.join(directory, 'selected-candidate.json'))) {
+              throw new Error('No fallback model produced a valid structured review. No approval was sent.');
+            }
+      - name: Select published review source
+        id: source
+        if: steps.scope.outputs.review_required == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const directory = path.join(process.env.RUNNER_TEMP, 'code-review-evidence');
+            const metadataPath = path.join(directory, 'review-metadata.json');
+            const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+            if (metadata.cache_hit) {
+              metadata.selected_model = 'cache';
+              fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+              return;
+            }
+            const selected = JSON.parse(fs.readFileSync(path.join(directory, 'selected-candidate.json'), 'utf8'));
+            metadata.selected_model = selected.model;
+            fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+            core.setOutput('comment_id', String(selected.comment_id));
+      - name: Ensure review did not modify tracked files
+        if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
+        run: git diff --exit-code
       - name: Publish formal review decision
         id: publish
+        if: steps.scope.outputs.review_required == 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
         env:
           CODE_REVIEW_DECISION_PATH: ${{ runner.temp }}/code-review-evidence/decision.json
           CI_RESULTS_JSON: ${{ toJSON(needs) }}
-          REVIEW_COMMENT_ID: ${{ steps.extract.outputs.comment_id }}
+          REVIEW_COMMENT_ID: ${{ steps.source.outputs.comment_id }}
         with:
           script: |
             const fs = require('fs');
@@ -452,6 +605,15 @@ jobs:
             }
             core.setOutput('event', event);
             core.setOutput('analysis_complete', String(report.analysis_complete));
+      - name: Record skipped AI review
+        if: steps.scope.outputs.review_required != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            await core.summary.addHeading('Automated code review')
+              .addRaw(`Not required: ${process.env.REVIEW_REASON}.`).write();
+        env:
+          REVIEW_REASON: ${{ steps.scope.outputs.review_reason }}
       - name: Upload review evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -480,7 +642,8 @@ jobs:
             const pr = context.payload.pull_request;
             const reviewExpected = pr.head.repo.full_name === context.repo.owner + '/' + context.repo.repo &&
               context.actor !== 'dependabot[bot]' && pr.user.login !== 'dependabot[bot]';
-            if (reviewExpected && (results.review.result !== 'success' ||
+            const reviewRequired = results.review.outputs.review_required === 'true';
+            if (reviewExpected && reviewRequired && (results.review.result !== 'success' ||
                 results.review.outputs.analysis_complete !== 'true' ||
                 !['APPROVE', 'COMMENT'].includes(results.review.outputs.event))) {
               failed.push('review');
@@ -488,5 +651,6 @@ jobs:
             await core.summary.addHeading('Pull request pipeline').addTable([
               [{ data: 'Stage', header: true }, { data: 'Result', header: true }],
               ...Object.entries(results).map(([name, value]) => [name, value.result])
-            ]).addRaw(reviewExpected ? '' : '\nAutomated review unavailable for forks/Dependabot; manual review is required.\n').write();
+            ]).addRaw(!reviewExpected ? '\nAutomated review unavailable for forks/Dependabot; manual review is required.\n' :
+              (reviewRequired ? '' : `\nAutomated review not required: ${results.review.outputs.review_reason}.\n`)).write();
             if (failed.length) core.setFailed(`PR blocked by: ${failed.join(', ')}`);

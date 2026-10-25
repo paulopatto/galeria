@@ -35,8 +35,9 @@ flowchart TD
 4. **Code review:** aguarda esses três jobs, inclusive quando falham. Baixa os
    relatórios da mesma execução, prepara `ci-context.json` com seus resultados,
    nomes/status de cada teste, falhas, pendências, SAST e dependências. O modelo
-   recebe esse contexto e o diff exato do SHA do PR como anexos. Artefatos ausentes
-   são identificados explicitamente; nunca contam como análise aprovada.
+   recebe esse contexto e o diff exato dos arquivos revisáveis. README, `docs/` e
+   edição de título/descrição não chamam o modelo. Artefatos ausentes são
+   identificados explicitamente; nunca contam como análise aprovada.
 5. **PR gate:** exige validação, testes, SAST e dependências bem-sucedidos. Para
    PRs com revisão automatizada disponível, também exige análise concluída e
    review publicado, sem solicitação de alterações. Um comentário por achados
@@ -51,11 +52,20 @@ O workflow de testes em push da `master` e por acionamento manual continua
 separado. O workflow antigo de review é substituído pelo pipeline para evitar
 revisões duplicadas. Alterações no título do PR também disparam a validação.
 
-## Revisão curta com orçamento explícito
+## Revisão curta com fallback explícito
 
-O modelo continua sendo **Big Pickle**, usando a action oficial do OpenCode e o
-secret `OPENCODE_API_KEY` existente. O serviço restringe o uso gratuito ao cliente
-OpenCode; a API direta retornou 429 e não é usada pelo pipeline.
+O pipeline usa a action oficial do OpenCode, sem API direta, nesta ordem:
+
+1. `opencode/big-pickle`;
+2. `opencode/beam-free`;
+3. `opencode-go/deepseek-v4.1-flash`;
+4. `opencode-go/gpt-6-luna`.
+
+Cada tentativa só acontece quando a anterior falha, expira ou não publica JSON
+válido para o SHA do PR. Uma resposta estruturada válida, inclusive com análise
+incompleta, encerra a cadeia e segue a política de comentário seguro. DeepSeek e
+GPT-6 Luna exigem uma credencial de assinatura OpenCode Go em `OPENCODE_API_KEY`.
+Se nenhuma tentativa gerar decisão válida, o job falha e nenhuma aprovação é enviada.
 
 O [perfil curto](../.agents/agents/code-reviewer.md) recebe o diff e o resumo do
 CI. Em [opencode.json](../opencode.json), `steps: 1` limita o agente a uma rodada
@@ -64,8 +74,8 @@ shell, leitura adicional, navegação, edição ou delegação é concedida. O a
 não repete scanners nem consome comentários anteriores como evidência.
 
 - **Uma rodada do agente principal**, sem ciclos de ferramentas.
-- **Dois minutos** para toda a action, em vez de dez. O timeout configurado do
-  provedor é de 90 segundos; eventuais retries internos ficam dentro do teto global.
+- **Um minuto por modelo e cinco minutos para o job inteiro**, sem retries do
+  workflow para o mesmo modelo.
 - **2.000 tokens de saída** no limite do modelo. JSON incompleto não é aceito.
 - **100 KB de contexto preparado pelo pipeline**, sem truncar o diff silenciosamente.
   PRs maiores devem ser divididos ou revisados manualmente; não são autoaprovados.
@@ -73,7 +83,9 @@ não repete scanners nem consome comentários anteriores como evidência.
   introduzidas são enviados. Até dez detalhes por categoria; contagens e omissões
   são explícitas. Os resultados completos permanecem nos artefatos.
 - `Gemfile.lock` fica fora do prompt: sua análise pertence ao job de dependências.
-  Os demais arquivos de texto alterados continuam no diff completo enviado.
+  O prompt contém somente Ruby, ERB, CSS/JS, testes, scripts, configurações de
+  execução e automações do GitHub. README, `docs/` e demais arquivos não
+  revisáveis não invalidam o cache.
 
 A action pode incluir metadados/histórico do PR e fazer operações internas de sessão;
 `steps: 1` não promete exatamente uma requisição de rede. O limite de 100 KB vale
@@ -82,22 +94,22 @@ O uso efetivo de tokens é consultado no OpenCode; o workflow registra orçament
 tamanho de entrada e acerto de cache em `review-metadata.json`.
 
 O pipeline extrai apenas o JSON publicado pelo bot para a execução atual, valida
-o schema e publica um review legível. Remove a resposta estruturada temporária
-após sucesso. Timeout, falha do cliente ou JSON inválido falham sem aprovação por
-fallback. Não há uma segunda análise programada pelo workflow.
+o schema e publica um review legível. Comentários temporários inválidos e a
+resposta estruturada selecionada são removidos após a publicação formal. O
+artefato registra o resultado e o motivo de cada fallback.
 
 ### Reutilização sem nova análise
 
-O review publicado contém uma marca de cache com hash da base, HEAD, modelo,
-perfil e contexto compacto do CI. A reutilização aceita apenas a última revisão
+O review publicado contém uma marca de cache com hash da base, HEAD, estratégia,
+cadeia de modelos, perfil e contexto compacto do CI. A reutilização aceita apenas a última revisão
 do bot para o mesmo HEAD, com análise completa e hash idêntico. Não usa comentários
 de usuários nem reviews descartados. Tempo de teste e ordem aleatória dos cenários
 não alteram o hash; uma mudança na base, código, política ou resultados o invalida.
 
-Assim, editar título/descrição ou repetir uma execução idêntica não consome novos
-tokens de review nem publica reviews duplicados. Os jobs de verificação continuam
-executando normalmente. A decisão reutilizada passa novamente pela validação de
-schema, pelo SHA atual, pelo estado de draft e pelos resultados atuais do CI.
+Assim, editar título/descrição não chama a IA. Repetir uma execução com o mesmo
+diff revisável reutiliza a decisão e não publica reviews duplicados. Quando não há
+arquivo revisável, o `PR gate` aceita explicitamente a revisão dispensada; os jobs
+determinísticos continuam obrigatórios.
 
 ### Decisão formal
 
@@ -116,7 +128,8 @@ Uma análise incompleta ou pedido de alterações reprova o `PR gate`.
 
 ## Configuração no GitHub
 
-1. Cadastre o repository secret `OPENCODE_API_KEY`, com acesso ao Big Pickle.
+1. Cadastre o repository secret `OPENCODE_API_KEY`, com acesso ao Big Pickle e à
+   assinatura OpenCode Go para os fallbacks DeepSeek e GPT-6 Luna.
 2. Permita as actions referenciadas no pipeline, incluindo `actions/github-script`,
    `ruby/setup-ruby`, `anomalyco/opencode/github`, release-drafter e Dorny.
 3. Em **Settings → Actions → General → Workflow permissions**, habilite
@@ -144,7 +157,8 @@ checkout de código do contribuidor para contornar essa restrição.
 - `pr-test-reports`: JSON/JUnit com todos os testes, inclusive falhas e pendências.
 - `pr-sast-reports`: JSON do Semgrep.
 - `pr-dependency-reports`: alterações de dependências e vulnerabilidades detectadas.
-- `code-review-evidence-<PR>-<tentativa>`: contexto compacto, diff, requisição sem credenciais, decisão e orçamento/cache,
+- `code-review-evidence-<PR>-<tentativa>`: contexto compacto, escopo de arquivos,
+  diff, requisição sem credenciais, tentativas/fallbacks, decisão e orçamento/cache,
   com retenção de sete dias. Não publique tokens, sessões ou dados pessoais.
 
 A revisão automática não executa scanners opcionais nem Playwright. Verificações

@@ -29,6 +29,32 @@
             "input": 160000,
             "output": 2000
           }
+        },
+        "beam-free": {
+          "limit": {
+            "context": 1048576,
+            "output": 2000
+          }
+        }
+      }
+    },
+    "opencode-go": {
+      "options": {
+        "timeout": 60000
+      },
+      "models": {
+        "deepseek-v4.1-flash": {
+          "limit": {
+            "context": 1000000,
+            "output": 2000
+          }
+        },
+        "gpt-6-luna": {
+          "limit": {
+            "context": 1050000,
+            "input": 922000,
+            "output": 2000
+          }
         }
       }
     }
