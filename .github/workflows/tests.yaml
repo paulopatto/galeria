@@ -32,7 +32,7 @@ jobs:
       - name: Run functional, integration and acceptance tests
         run: |
           mkdir -p tmp/test-results
-          bundle exec rspec --format progress --format json --out tmp/test-results/rspec.json
+          bundle exec rspec --format documentation --format json --out tmp/test-results/rspec.json
       - name: Generate JUnit report
         if: ${{ !cancelled() && hashFiles('tmp/test-results/rspec.json') != '' }}
         run: bundle exec ruby script/rspec_to_junit.rb tmp/test-results/rspec.json tmp/test-results/rspec.xml
@@ -56,4 +56,4 @@ jobs:
           path: tmp/test-results/rspec.xml
           reporter: java-junit
           list-suites: all
-          list-tests: failed
+          list-tests: all
