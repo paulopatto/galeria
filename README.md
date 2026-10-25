@@ -8,6 +8,12 @@ com Elastic BeanStalk por exemplo.
 
 ------
 
+## Code review automatizado
+
+Pull requests recebem uma revisão do OpenCode com o modelo Big Pickle, focada em
+Ruby/Sinatra e segurança. Veja a [documentação de configuração, funcionamento e
+limitações](docs/automated-code-review.md).
+
 ## Como executar esse projeto
 
 ### Desenvolvimento
