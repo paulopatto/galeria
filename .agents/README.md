@@ -19,6 +19,10 @@ aprovadas. Use perguntas para decisões pendentes, não para fatos consultáveis
 | Executar uma especificação em fatias verificáveis | [implement-spec](skills/implement-spec/SKILL.md) |
 | Implementar ou corrigir comportamento com testes | [tdd](skills/tdd/SKILL.md) |
 | Preparar a descrição de um PR | [pr](skills/pr/SKILL.md) |
+| Manter uma mudança completa, porém mínima | [ponytail](skills/ponytail/SKILL.md) |
+| Auditar ou revisar código contra excesso e riscos | [ponytail-audit](skills/ponytail-audit/SKILL.md) ou [ponytail-review](skills/ponytail-review/SKILL.md) |
+| Responder de forma concisa sem perder informação técnica | [caveman](skills/caveman/SKILL.md) |
+| Localizar código, corrigir, refatorar ou migrar com escopo controlado | [caveman-explore](skills/caveman-explore/SKILL.md), [surgical-patch](skills/surgical-patch/SKILL.md), [safe-refactor](skills/safe-refactor/SKILL.md) ou [migration](skills/migration/SKILL.md) |
 | Trabalhar em rotas, ERB e middleware | [ruby-sinatra](skills/ruby-sinatra/SKILL.md) |
 | Revisar mudanças contra requisitos e convenções | [code-review](skills/code-review/SKILL.md) |
 
@@ -34,6 +38,34 @@ Fluxo sugerido: `grill-me` quando houver decisões abertas → `to-spec` para
 documentar → `implement-spec` usando `tdd` e `ruby-sinatra` → `code-review`.
 Para um bug pequeno, use diretamente `tdd`; não transforme toda tarefa em
 uma entrevista. As skills de entrevista e especificação são de uso explícito.
+
+## Ponytail e Caveman
+
+Use Ponytail para decidir e entregar a menor mudança que resolve por completo
+o pedido. Ele favorece reutilizar o que o projeto já tem, evita abstrações e
+dependências especulativas e mantém testes, chamadores e tratamento de erros
+necessários. `ponytail-review` revisa uma mudança; `ponytail-audit` examina o
+repositório; `ponytail-debt` lista atalhos registrados como `shortcut:`.
+
+Use Caveman quando o benefício for economizar contexto ou tornar o fluxo mais
+direto, sem omitir fatos técnicos. Além dos modos de resposta `caveman`,
+`ultracave` e `megacave`, a coleção oferece skills focadas: investigação
+somente-leitura (`caveman-explore`, `investigate-first`), implementação
+enxuta (`lean-build`, `surgical-patch`), mudança estrutural (`safe-refactor`,
+`migration`), revisão (`caveman-review`) e confirmação de entrega
+(`verify-and-stop`).
+
+Em hosts que suportam comandos, `/ponytail` e `/caveman` ativam modos que
+permanecem na sessão. Desative-os explicitamente com `stop ponytail`,
+`stop caveman` ou `normal mode` quando a regra não for mais desejada. Em
+outros hosts, peça para ler o `SKILL.md` correspondente antes da tarefa.
+
+Leia a skill antes de usá-la e siga suas confirmações. Em especial,
+`caveman-compress` envia o texto do arquivo indicado para o provedor de modelo
+configurado e pode substituir esse arquivo após criar um backup; use-a apenas
+com um caminho explícito e dados que possam sair da máquina. `caveman-setup`,
+`caveman-manage` e `caveman-optimize` integram ou alteram configurações do
+Caveman Cloud e requerem autorização explícita.
 
 Antes do primeiro uso das skills de engenharia, execute
 `/setup-matt-pocock-skills` no seu agente. A skill oficial configura o tracker e
@@ -77,6 +109,8 @@ npx skills@latest add mattpocock/skills --skill=pr --agent codex --yes
 npx skills@latest add mattpocock/skills \
   --skill grill-me grilling to-spec to-tickets implement-spec code-review \
   codebase-design domain-modeling setup-matt-pocock-skills --agent codex --yes
+npx skills@latest add DietrichGebert/ponytail --skill '*' --agent codex --yes
+npx skills@latest add JuliusBrussee/caveman --skill '*' --agent codex --yes
 ```
 
 A seleção `codex` usa `.agents/skills/`, também descoberta pelo OpenCode.
@@ -88,6 +122,9 @@ Não modifique as skills oficiais para aplicar regras locais. Atualize-as pelo
 instalador, revise o diff e registre a origem em [SOURCES.md](SOURCES.md).
 A licença está em [licenses/mattpocock-skills-MIT.txt](licenses/mattpocock-skills-MIT.txt).
 `ruby-sinatra` e os três perfis são conteúdo local do projeto.
+
+As skills Ponytail e Caveman também são mantidas sem adaptações locais. O
+instalador registra suas versões e hashes em [`skills-lock.json`](../skills-lock.json).
 
 Nesta execução, `npx skills@latest` falhou com HTTP 503 no registro npm. Para
 substituir as adaptações sem alterar o conteúdo oficial, os arquivos foram

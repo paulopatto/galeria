@@ -31,3 +31,14 @@ execute `/setup-matt-pocock-skills` para configurar tracker e documentos de dom�
 `ruby-sinatra`, `agents/*.md` e os guias do projeto são conteúdo local, separado
 das skills oficiais. O perfil automatizado `code-reviewer` define o comentário
 curto do CI sem alterar ou executar o fluxo interativo da skill oficial.
+
+## Ponytail e Caveman
+
+As skills abaixo foram instaladas sem alterações via `npx skills@latest add`,
+com `--agent codex --yes --skill '*'`. As origens, caminhos e hashes de cada
+skill ficam versionados em [`skills-lock.json`](../skills-lock.json).
+
+| Fonte | Skills instaladas | Licença declarada |
+| --- | --- | --- |
+| [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail) | `ponytail`, `ponytail-audit`, `ponytail-debt`, `ponytail-gain`, `ponytail-help`, `ponytail-review` | MIT |
+| [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) | `cavecrew`, `caveman`, `caveman-*`, `investigate-first`, `lean-build`, `megacave`, `migration`, `safe-refactor`, `surgical-patch`, `ultracave`, `verify-and-stop` | Apache-2.0 |
