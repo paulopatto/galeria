@@ -5,6 +5,21 @@ Comece pelo [AGENTS.md](../AGENTS.md). As skills ficam em
 São arquivos versionados e editáveis; não exigem npm, plugin ou instalação
 global para serem lidos.
 
+## Skills
+
+Leia apenas a skill relevante, antes de aplicá-la. Instruções explícitas do
+usuário e do ambiente prevalecem sobre estes fluxos. Não reabra decisões já
+aprovadas. Use perguntas para decisões pendentes, não para fatos consultáveis.
+
+| Situação | Skill local |
+| --- | --- |
+| Esclarecer uma ideia ou decisão | [grill-me](skills/grill-me/SKILL.md) |
+| Converter decisões em uma especificação | [to-spec](skills/to-spec/SKILL.md) |
+| Executar uma especificação em fatias verificáveis | [implement-spec](skills/implement-spec/SKILL.md) |
+| Implementar ou corrigir comportamento com testes | [tdd](skills/tdd/SKILL.md) |
+| Trabalhar em rotas, ERB e middleware | [ruby-sinatra](skills/ruby-sinatra/SKILL.md) |
+| Revisar mudanças contra requisitos e convenções | [code-review](skills/code-review/SKILL.md) |
+
 ## Uso
 
 Em ferramentas que descobrem `.agents/skills/`, selecione a skill pelo nome
@@ -51,5 +66,4 @@ Preserve as adaptações Ruby/RSpec, atualize a referência e confira a licença
 Não sobrescreva este conjunto com um instalador ou atualização automática.
 
 Ao adicionar uma skill, use uma pasta cujo nome corresponda ao campo `name`,
-inclua uma descrição que explique quando usá-la e atualize o índice em
-`AGENTS.md`. Confira metadados YAML, links relativos e `git diff --check`.
+inclua uma descrição que explique quando usá-la e atualize o índice de skills neste arquivo. Confira metadados YAML, links relativos e `git diff --check`.

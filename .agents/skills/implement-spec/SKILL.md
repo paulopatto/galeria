@@ -31,7 +31,8 @@ em branch própria quando necessário. Não é obrigatório ter tickets externos
 O padrão é execução sequencial. Se o usuário autorizar subagentes e a ferramenta
 oferecer suporte, distribua somente fatias independentes. Cada implementador
 deve receber os critérios, os arquivos de referência e uma área de escrita
-isolada, preferencialmente um worktree baseado na branch de integração.
+isolada em um worktree e uma branch próprios, baseados na branch de integração.
+Siga o [fluxo de worktrees](../../workflow.md#tarefas-com-multiagentes).
 Integre e valide os resultados antes de liberar trabalho dependente. Não
 delegue a edição simultânea do mesmo arquivo.
 
