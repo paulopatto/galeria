@@ -1,130 +1,126 @@
-# Code review automatizado com OpenCode
+# Pipeline de pull requests e code review
 
-O workflow [OpenCode PR review](../.github/workflows/opencode-review.yml) usa
-`opencode/big-pickle` para revisar pull requests e publicar a resposta em um
-comentário no próprio PR. A action seleciona `agent: code-reviewer`, registrado
-como agente primário em [opencode.json](../opencode.json), e carrega o perfil
-[code-reviewer](../.agents/agents/code-reviewer.md). O workflow contém apenas
-um prompt curto de execução; as regras ficam no agente e no
-[guia de ferramentas](../.agents/review-tools.md).
+O workflow [Pull request pipeline](../.github/workflows/pull-request.yaml) organiza
+as verificações em jobs separados e usa **PR gate** como resultado consolidado.
+Configure apenas esse nome como check obrigatório no ruleset da `master`.
+Os jobs e o relatório detalhado dos testes continuam visíveis para diagnóstico.
 
-O comentário é em português brasileiro: uma linha de resumo com o commit e
-somente achados acionáveis, com severidade, arquivo/linha, impacto e correção.
-Além do comentário, o workflow publica um review formal conforme a política abaixo.
-Comandos, versões, limitações e evidências ficam no toggle **Detalhes da análise**.
-Achados relevantes e limitações que comprometam a conclusão permanecem visíveis.
-Se não houver achados, o agente informa isso sem gerar seções vazias.
+```mermaid
+flowchart TD
+  A[PR type / release-drafter] --> B[Tests]
+  A --> C[SAST / Semgrep]
+  A --> D[Dependencies / Dependency Review]
+  B --> E[Code review com contexto do CI]
+  C --> E
+  D --> E
+  E --> F[PR gate]
+```
 
-## Configuração
+## Sequência e evidências
 
-1. Gere uma API key no [OpenCode Console](https://opencode.ai/console) com acesso
-   ao modelo Big Pickle.
-2. No repositório, abra **Settings → Secrets and variables → Actions → New
-   repository secret** e salve a chave como `OPENCODE_API_KEY`.
-3. Habilite GitHub Actions e permita as actions `actions/checkout` e
-   `anomalyco/opencode/github`, `actions/github-script` e `actions/upload-artifact`, caso exista uma política
-   de restrição de actions.
-   A política da organização também precisa permitir `pull-requests: write` e
-   `issues: write`.
-4. Em **Settings → Actions → General → Workflow permissions**, habilite
+1. **PR type:** valida `type(context): description`. O release-drafter executa
+   somente a classificação por labels (`disable-releaser: true`), sem criar ou
+   atualizar releases em PRs. A geração real do draft permanece no push da `master`.
+2. **Tests:** executa RSpec no Ruby 2.6.2 com nomes dos cenários nos logs,
+   gera JSON/JUnit e publica todos os cenários via `dorny/test-reporter`.
+3. **SAST** e **Dependencies:** rodam em paralelo com os testes. Semgrep usa o
+   conjunto mantido `p/ruby`, sem instalar gems da aplicação. Dependency Review
+   verifica vulnerabilidades introduzidas pelas alterações nas dependências e
+   falha a partir de severidade moderada. Não exige atualizar dívida preexistente
+   que não foi introduzida pelo PR. Erros de instalação, rede ou análise falham o job.
+4. **Code review:** aguarda esses três jobs, inclusive quando falham. Baixa os
+   relatórios da mesma execução, prepara `ci-context.json` com seus resultados,
+   nomes/status de cada teste, falhas, pendências, SAST e dependências. O modelo
+   recebe esse contexto e o diff exato do SHA do PR como anexos. Artefatos ausentes
+   são identificados explicitamente; nunca contam como análise aprovada.
+5. **PR gate:** exige validação, testes, SAST e dependências bem-sucedidos. Para
+   PRs com revisão automatizada disponível, também exige análise concluída e
+   review publicado, sem solicitação de alterações. Um comentário por achados
+   somente médios não reprova o gate se as demais verificações estiverem verdes.
+
+A configuração [Dependabot](../.github/dependabot.yml) abre PRs semanais para
+Bundler e GitHub Actions, com títulos Conventional Commits. O Dependabot não
+é um scanner executado dentro de cada PR; essa função é do Dependency Review.
+A configuração passa a vigorar depois de chegar à branch padrão.
+
+O workflow de testes em push da `master` e por acionamento manual continua
+separado. O workflow antigo de review é substituído pelo pipeline para evitar
+revisões duplicadas. Alterações no título do PR também disparam a validação.
+
+## Modelo, perfil e decisão formal
+
+O pipeline usa o OpenCode CLI **1.2.19**, instalado da release oficial com
+verificação SHA-256, e o modelo `opencode/big-pickle`. A versão é fixa para
+preservar o contrato de execução e os eventos JSON. O CLI recebe explicitamente
+`--agent code-reviewer`, registrado em [opencode.json](../opencode.json), com
+as regras em [code-reviewer](../.agents/agents/code-reviewer.md).
+
+A resposta final do modelo é JSON, extraída dos eventos `text` do CLI e validada
+antes de usar a API de reviews. O workflow determina o evento:
+
+| Achados e evidências | Review formal |
+| --- | --- |
+| Algum achado crítico ou alto confirmado | Solicitar alterações (`REQUEST_CHANGES`) |
+| Apenas achados médios | Comentar (`COMMENT`) |
+| Sem achados ou apenas baixos, com análise completa e CI verde | Aprovar (`APPROVE`) |
+| Análise incompleta ou verificações sem sucesso, sem alto/crítico | Comentar, sem aprovação |
+
+O resumo e os achados ficam visíveis no review. Comandos, versões, limitações e
+links pertinentes ficam no toggle **Detalhes da análise**. O perfil exige
+reproduzir ou confirmar a semântica antes de repetir um alerta; comentários de
+execuções anteriores não são evidência de que o problema ainda existe.
+
+JSON inválido, execução sem decisão, erro do modelo ou rejeição da API falham o
+job; não há aprovação por fallback. Antes da publicação, o workflow confere o
+SHA atual e associa o review ao SHA analisado. Se o PR mudou ou foi fechado,
+a decisão antiga é descartada. Em drafts, uma aprovação vira comentário até o
+PR estar pronto. Aprovação não faz merge nem substitui os demais requisitos.
+
+## Configuração no GitHub
+
+1. Cadastre o repository secret `OPENCODE_API_KEY`, com acesso ao Big Pickle.
+2. Permita as actions referenciadas no pipeline, incluindo `actions/github-script`,
+   `actions/dependency-review-action`, `ruby/setup-ruby`, release-drafter e Dorny.
+3. Em **Settings → Actions → General → Workflow permissions**, habilite
    **Allow GitHub Actions to create and approve pull requests**, se permitido
-   pela política da organização. O token precisa de `pull-requests: write`.
-5. Abra ou atualize um PR de uma branch deste repositório e confira o job
-   **review**, o comentário e o review formal no PR. Se o GitHub negar a criação
-   do review (por política ou por autorrevisão), o passo falha explicitamente;
-   o workflow não considera a aprovação concluída.
+   pela organização. O job de review usa `pull-requests: write`.
+4. No ruleset da `master`, habilite **Require status checks to pass** e selecione
+   somente **PR gate**. Se houver checks antigos obrigatórios, substitua-os por
+   esse resultado consolidado. Configure depois da primeira execução do novo check.
 
-O workflow usa `use_github_token: true` e o `GITHUB_TOKEN` temporário fornecido
-pelo GitHub. Não é necessário instalar o GitHub App do OpenCode, criar um PAT ou
-configurar OIDC. As permissões são `contents: read`, `pull-requests: write` e
-`issues: write`. Comentários e reações usam endpoints de issues, mas o recurso
-revisado é um pull request e precisa de acesso de escrita em pull requests.
-`contents: read` impede a publicação de commits com esse token.
-O checkout não persiste credenciais e o compartilhamento público de sessões
-OpenCode fica desabilitado (`share: false`).
+Testes e scanners ficam em jobs isolados, sem `OPENCODE_API_KEY`. O job do modelo
+não recebe token GitHub no processo do CLI, não executa scripts ou testes do PR
+nem instala seu bundle. Apenas o passo de publicação usa o token de review.
+Checkout não persiste credenciais. A configuração mantém leitura de código;
+a escrita em PRs fica nos jobs de classificação e de publicação de review.
 
-## Quando e como a revisão acontece
+PRs de forks e do Dependabot não recebem o secret do modelo. Neles, testes e
+segurança continuam obrigatórios, a revisão automática é dispensada pelo gate
+e a revisão humana permanece necessária. Não use `pull_request_target` com
+checkout de código do contribuidor para contornar essa restrição.
 
-- Executa em `opened`, `synchronize`, `reopened` e `ready_for_review`, inclusive
-  em drafts. Novos commits disparam uma nova análise do diff completo.
-- Uma execução nova cancela a anterior do mesmo PR para reduzir análises
-  desatualizadas. PRs diferentes são revisados independentemente.
-- O job tem limite de 20 minutos. Falhas de autenticação, indisponibilidade ou
-  limites do provedor aparecem no Actions; não há fallback para outro modelo.
-- A action publica um comentário por execução. Comentários de execuções
-  anteriores podem permanecer: confira o commit e a execução correspondentes.
-- O review apresenta resumo, achados com severidade, arquivo/linha, impacto e
-  sugestão de correção, além das ferramentas executadas e limitações.
-- O agente grava `decision.json` no diretório de evidências com o SHA analisado,
-  conclusão da análise e achados estruturados. Um passo separado valida o schema
-  e calcula o evento; o agente não escolhe diretamente a aprovação.
-- Crítica ou alta: **Solicitar alterações** (`REQUEST_CHANGES`).
-- Somente médias: **Comentar** (`COMMENT`), sem aprovação nem solicitação de alterações.
-- Análise completa sem achados ou somente baixas: **Aprovar** (`APPROVE`).
-- Análise incompleta sem achado crítico/alto: somente comentário. JSON ausente,
-  inválido ou de outro SHA falha o passo, sem publicar aprovação.
-- Antes de publicar, o workflow confere o SHA atual do PR. Se a branch mudou ou
-  o PR foi fechado, a decisão antiga é descartada. Em drafts, uma aprovação é
-  convertida em comentário até o evento `ready_for_review`.
-- A aprovação não faz merge nem dispensa outras revisões ou checks obrigatórios.
-  O efeito de uma solicitação de alterações depende das regras do repositório.
+## Relatórios e diagnóstico
 
-PRs de forks e do Dependabot executam apenas o job **unavailable**, que explica
-a ausência de review no resumo do Actions. Nesses eventos, o GitHub normalmente
-retém secrets e fornece token somente de leitura. Faça a revisão humana; para
-usar a automação, um mantenedor pode inspecionar a contribuição e trazê-la para
-uma branch do próprio repositório. Não use `pull_request_target` com checkout
-do código do contribuidor para contornar essa restrição.
+- `pr-test-reports`: JSON/JUnit com todos os testes, inclusive falhas e pendências.
+- `pr-sast-reports`: JSON do Semgrep.
+- `pr-dependency-reports`: alterações de dependências e vulnerabilidades detectadas.
+- `code-review-evidence-<PR>-<tentativa>`: contexto do CI, diff e decisão estruturada,
+  com retenção de sete dias. Não publique tokens, sessões ou dados pessoais.
 
-## Ferramentas e evidências
+Scanners opcionais do agente seguem o [guia de ferramentas](../.agents/review-tools.md).
+Eles complementam a evidência; não executam a aplicação no job com a API key.
+Playwright só se aplica a preview autorizado e não é instalado pelo pipeline.
 
-O agente tem acesso a shell e web para verificações; as ferramentas de edição e
-delegação estão desabilitadas. As permissões de shell não constituem sandbox:
-o perfil também proíbe alterar código ou executar scripts do PR com credenciais.
+Secret ausente, erro do provedor, rede indisponível ou negação de aprovação pelo
+GitHub aparecem explicitamente no job. Reexecutar um workflow antigo reutiliza
+sua versão; use uma execução do commit com a correção. Dependências externas e
+regras remotas podem ficar indisponíveis, o que reprova a verificação afetada.
 
-Consulte o [guia de ferramentas](../.agents/review-tools.md) para seleção,
-comandos, isolamento e limitações de Bundler-audit, Dawnscanner, Brakeman e
-RuboCop/Security. Brakeman só se aplica a Rails; os cops Security fazem parte
-do RuboCop. Ferramentas não são instaladas automaticamente e nenhum scanner é
-obrigatório em todos os PRs. O runtime da aplicação continua Ruby 2.6.2/Sinatra 2.x.
+Segundo a documentação do OpenCode, dados coletados durante o período gratuito
+do Big Pickle podem ser usados para melhorar o modelo. O pipeline não cria
+sessões públicas compartilhadas, mas isso não altera a política do provedor.
 
-Playwright é opcional para uma URL de preview autorizada, quando houver mudança
-visual ou necessidade de evidência. Não se inicia a aplicação do PR no job com
-secrets. Se não houver preview ou navegador, a limitação aparece nos detalhes.
-O workflow não instala Playwright, browsers ou servidores MCP.
-
-Screenshots e relatórios pertinentes devem ser gravados em
-`$RUNNER_TEMP/code-review-evidence`. A action publica essa pasta como artefato
-`code-review-evidence-<PR>-<tentativa>`, com retenção de sete dias. A saída
-estruturada `decision.json` também fica nesse artefato. Sem arquivos, o upload
-é ignorado. Nunca inclua tokens, sessões, dados pessoais ou logs completos.
-
-## Diagnóstico e manutenção
-
-- **Secret ausente:** o passo **Check OpenCode credentials** falha com instruções;
-  cadastre `OPENCODE_API_KEY` e use **Re-run jobs**.
-- **401/403 do provedor:** confira a validade da chave e o acesso a Big Pickle
-  no Console. **403 do GitHub ao reagir/comentar:** confira em **Set up job →
-  GITHUB_TOKEN Permissions** se `PullRequests: write` e `Issues: write` estão
-  presentes. `permission: admin` no log é a permissão do usuário que disparou a
-  execução, não a do token da action. Após corrigir o workflow, use a execução
-  disparada pelo novo commit: reexecutar um run antigo reutiliza sua revisão do
-  workflow e pode preservar a configuração incorreta. Se as permissões efetivas
-  continuarem somente de leitura, confira a política de Actions da organização.
-- **Rate limit, timeout ou indisponibilidade:** consulte os logs e tente
-  **Re-run jobs**. Não considere o PR revisado se não houver resposta completa.
-- **PR já aberto antes da inclusão do workflow:** envie um novo commit ou
-  reabra o PR para disparar a revisão.
-- As actions estão fixadas em commits. Ao atualizá-las, valide seus inputs.
-  A action oficial instala a versão atual do CLI OpenCode; fixar a action não
-  fixa o CLI nem a disponibilidade do modelo no provedor.
-
-O código e o contexto enviados ao modelo são processados pelo OpenCode.
-Segundo a documentação, dados coletados durante o período gratuito do Big
-Pickle podem ser usados para melhorar o modelo. `share: false` desabilita links
-públicos de sessão, mas não altera a política do provedor. Não envie secrets
-ou dados pessoais no código ou nos comentários.
-
-Referências: [integração GitHub e exemplo de PR](https://opencode.ai/docs/github/#pull-request-example)
-e [modelos e privacidade](https://opencode.ai/v2/docs/console/models/).
-
+Referências: [OpenCode CLI](https://opencode.ai/docs/cli/),
+[modelos e privacidade](https://opencode.ai/v2/docs/console/models/),
+[Semgrep](https://semgrep.dev/docs/semgrep-ci/overview) e
+[Dependency Review](https://github.com/actions/dependency-review-action).

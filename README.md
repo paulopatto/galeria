@@ -147,18 +147,23 @@ que faça o cenário passar exige remover a marcação de pendência.
 
 ### Relatório no CI
 
-O workflow `.github/workflows/tests.yaml` executa toda a suíte em pull requests,
-no `master` e por acionamento manual. O JSON nativo do RSpec é convertido para JUnit
-por `script/rspec_to_junit.rb`, usando apenas a biblioteca padrão do Ruby. Os dois
-relatórios são preservados como artefatos mesmo quando testes falham.
-O `dorny/test-reporter` publica o resultado nos Checks; em PRs de forks, o token
-é somente leitura e os relatórios ficam disponíveis no artefato. Não são necessários
-secrets. Falhas da suíte continuam reprovando o job.
+O [pipeline de pull requests](.github/workflows/pull-request.yaml) valida o tipo
+do PR e executa testes, SAST e análise de dependências em paralelo. O code review
+automatizado recebe todos os resultados antes de publicar sua decisão formal.
+O check **PR gate** consolida as etapas e deve ser o único obrigatório no ruleset.
+Veja a [sequência, política de review e configuração](docs/automated-code-review.md).
 
-Para gerar o mesmo relatório localmente (execute a conversão mesmo se houver falhas):
+Os testes mostram o nome de cada cenário nos logs e no Dorny. O JSON nativo do
+RSpec é convertido para JUnit por `script/rspec_to_junit.rb`, usando apenas a
+biblioteca padrão do Ruby. Os relatórios ficam disponíveis como artefatos mesmo
+quando testes falham. PRs de forks recebem os artefatos; a publicação de Checks
+pelo Dorny usa token de escrita somente em PRs do próprio repositório.
+O workflow de testes também continua no push da `master` e por acionamento manual.
+
+Para gerar os relatórios localmente (execute a conversão mesmo se houver falhas):
 
 ```bash
 mkdir -p tmp/test-results
-bundle exec rspec --format progress --format json --out tmp/test-results/rspec.json
+bundle exec rspec --format documentation --format json --out tmp/test-results/rspec.json
 bundle exec ruby script/rspec_to_junit.rb tmp/test-results/rspec.json tmp/test-results/rspec.xml
 ```

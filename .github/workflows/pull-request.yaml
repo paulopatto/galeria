@@ -1,0 +1,370 @@
+name: Pull request pipeline
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-pipeline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: PR type
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Validate Conventional Commit title
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title;
+            const match = /^(feat|fix|chore|refactor|build|ci|docs|style|revert|test|perf)\([^()\r\n]+\)!?: \S[^\r\n]*$/.exec(title);
+            if (!match) throw new Error('Use type(context): description in the PR title.');
+            core.info(`PR type: ${match[1]}`);
+      - name: Classify PR with release-drafter
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: release-drafter/release-drafter@v6
+        with:
+          config-name: release-drafter.conf.yaml
+          disable-releaser: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  tests:
+    name: Tests
+    needs: validate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      checks: write
+    env:
+      RACK_ENV: test
+      OTEL_TRACES_EXPORTER: none
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - name: Run functional, integration and acceptance tests
+        id: rspec
+        continue-on-error: true
+        run: |
+          mkdir -p tmp/test-results
+          bundle exec rspec --format documentation --format json --out tmp/test-results/rspec.json
+      - name: Generate JUnit report
+        if: ${{ !cancelled() && hashFiles('tmp/test-results/rspec.json') != '' }}
+        run: bundle exec ruby script/rspec_to_junit.rb tmp/test-results/rspec.json tmp/test-results/rspec.xml
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-test-reports
+          path: tmp/test-results/
+          if-no-files-found: warn
+      - name: Publish all test names
+        if: >-
+          ${{ !cancelled() && hashFiles('tmp/test-results/rspec.xml') != '' &&
+              github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: dorny/test-reporter@v2
+        with:
+          name: Functional, integration and acceptance results
+          path: tmp/test-results/rspec.xml
+          reporter: java-junit
+          list-suites: all
+          list-tests: all
+          fail-on-error: false
+      - name: Enforce test result
+        if: ${{ !cancelled() && steps.rspec.outcome != 'success' }}
+        run: exit 1
+
+  sast:
+    name: SAST
+    needs: validate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Semgrep
+        run: python -m pip install --disable-pip-version-check 'semgrep==1.182.0'
+      - name: Scan Ruby code
+        id: scan
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          semgrep scan --config p/ruby --error --metrics off --disable-version-check --json --output reports/semgrep.json .
+      - name: Upload SAST report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-sast-reports
+          path: reports/semgrep.json
+          if-no-files-found: warn
+      - name: Enforce SAST result
+        if: ${{ !cancelled() && steps.scan.outcome != 'success' }}
+        run: exit 1
+
+  dependencies:
+    name: Dependencies
+    needs: validate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Review dependency changes
+        id: scan
+        continue-on-error: true
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          license-check: false
+          comment-summary-in-pr: never
+      - name: Save dependency results
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        env:
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          DEPENDENCY_CHANGES: ${{ steps.scan.outputs.dependency-changes }}
+          VULNERABLE_CHANGES: ${{ steps.scan.outputs.vulnerable-changes }}
+        with:
+          script: |
+            const fs = require('fs');
+            fs.mkdirSync('reports', { recursive: true });
+            fs.writeFileSync('reports/dependencies.json', JSON.stringify({
+              outcome: process.env.SCAN_OUTCOME,
+              dependency_changes: JSON.parse(process.env.DEPENDENCY_CHANGES || '[]'),
+              vulnerable_changes: JSON.parse(process.env.VULNERABLE_CHANGES || '[]')
+            }, null, 2));
+      - name: Upload dependency report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-dependency-reports
+          path: reports/dependencies.json
+          if-no-files-found: warn
+      - name: Enforce dependency result
+        if: ${{ !cancelled() && steps.scan.outcome != 'success' }}
+        run: exit 1
+
+  review:
+    name: Code review
+    needs: [validate, tests, sast, dependencies]
+    if: >-
+      ${{ always() && !cancelled() && needs.validate.result == 'success' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.actor != 'dependabot[bot]' &&
+          github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    env:
+      CODE_REVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      CODE_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+    outputs:
+      event: ${{ steps.publish.outputs.event }}
+      analysis_complete: ${{ steps.publish.outputs.analysis_complete }}
+    steps:
+      - name: Check OpenCode credentials
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          if [ -z "$OPENCODE_API_KEY" ]; then
+            echo '::error::Configure OPENCODE_API_KEY to run the automated review.'
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/code-review-evidence" "$RUNNER_TEMP/ci-reports"
+      - name: Checkout analyzed commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download verification reports
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pr-*-reports
+          merge-multiple: true
+          path: ${{ runner.temp }}/ci-reports
+      - name: Prepare review context
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        env:
+          CI_RESULTS_JSON: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const directory = path.join(process.env.RUNNER_TEMP, 'ci-reports');
+            const results = JSON.parse(process.env.CI_RESULTS_JSON);
+            const reports = {};
+            for (const file of ['rspec.json', 'semgrep.json', 'dependencies.json']) {
+              const filename = path.join(directory, file);
+              reports[file] = fs.existsSync(filename) ? JSON.parse(fs.readFileSync(filename, 'utf8')) : { unavailable: true };
+            }
+            const testReport = reports['rspec.json'];
+            const tests = testReport.examples || [];
+            const contextReport = {
+              commit_sha: process.env.CODE_REVIEW_HEAD_SHA,
+              jobs: Object.fromEntries(Object.entries(results).map(([name, value]) => [name, value.result])),
+              tests: { summary: testReport.summary || null, cases: tests.map(test => ({
+                name: test.full_description, status: test.status,
+                file: test.file_path, line: test.line_number,
+                pending_reason: test.pending_message, exception: test.exception
+              })) },
+              sast: reports['semgrep.json'],
+              dependencies: reports['dependencies.json'],
+              missing_reports: Object.entries(reports).filter(([, value]) => value.unavailable).map(([file]) => file)
+            };
+            fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'code-review-evidence', 'ci-context.json'), JSON.stringify(contextReport, null, 2));
+      - name: Prepare exact diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git diff --no-ext-diff "$BASE_SHA...$CODE_REVIEW_HEAD_SHA" > "$RUNNER_TEMP/code-review-evidence/pr.diff"
+      - name: Install pinned OpenCode CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/opencode"
+          curl -fsSL --retry 2 https://github.com/anomalyco/opencode/releases/download/v1.2.19/opencode-linux-x64.tar.gz -o "$RUNNER_TEMP/opencode.tar.gz"
+          echo '208a21ee4f86d604c4666aa4ae4b4a566214f540767817a53d37dc1f9c67a3a4  '"$RUNNER_TEMP/opencode.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/opencode.tar.gz" -C "$RUNNER_TEMP/opencode"
+      - name: Review diff with verification context
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_CONFIG: ${{ github.workspace }}/opencode.json
+        run: |
+          "$RUNNER_TEMP/opencode/opencode" run \
+            'Revise o diff completo do SHA em CODE_REVIEW_HEAD_SHA conforme o perfil code-reviewer. Considere os resultados de testes, SAST e dependências anexados. Diferencie dívida preexistente de regressões. Use bash com command e description quando necessário. A resposta final deve ser somente o JSON de decisão definido no perfil, sem Markdown externo. Não altere código nem publique comentários ou reviews.' \
+            --model opencode/big-pickle --agent code-reviewer --format json \
+            --file "$RUNNER_TEMP/code-review-evidence/ci-context.json" \
+            --file "$RUNNER_TEMP/code-review-evidence/pr.diff" \
+            > "$RUNNER_TEMP/review-events.jsonl"
+      - name: Extract structured review
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const events = fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'review-events.jsonl'), 'utf8')
+              .split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
+            if (events.some(event => event.type === 'error')) throw new Error('OpenCode reported an error; no review can be published.');
+            const messages = events.filter(event => event.type === 'text').map(event => event.part.text);
+            if (!messages.length) throw new Error('OpenCode returned no final decision.');
+            const text = messages[messages.length - 1].trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+            const report = JSON.parse(text);
+            fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'code-review-evidence', 'decision.json'), JSON.stringify(report, null, 2));
+      - name: Publish formal review decision
+        id: publish
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        env:
+          CODE_REVIEW_DECISION_PATH: ${{ runner.temp }}/code-review-evidence/decision.json
+          CI_RESULTS_JSON: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync(process.env.CODE_REVIEW_DECISION_PATH, 'utf8'));
+            const expectedSha = context.payload.pull_request.head.sha;
+            const severities = ['critical', 'high', 'medium', 'low'];
+            const nonempty = value => typeof value === 'string' && value.trim().length > 0;
+            if (report.commit_sha !== expectedSha || typeof report.analysis_complete !== 'boolean' ||
+                !nonempty(report.summary) || !Array.isArray(report.findings)) {
+              throw new Error('Missing or invalid structured review for the expected commit. No approval was sent.');
+            }
+            for (const finding of report.findings) {
+              if (!finding || !severities.includes(finding.severity) ||
+                  !['title', 'file', 'impact', 'correction'].every(key => nonempty(finding[key])) ||
+                  !Number.isInteger(finding.line) || finding.line < 1) {
+                throw new Error('Invalid finding in structured review. No approval was sent.');
+              }
+            }
+            const params = { ...context.repo, pull_number: context.payload.pull_request.number };
+            const { data: pr } = await github.rest.pulls.get(params);
+            if (pr.head.sha !== expectedSha || pr.state !== 'open') {
+              core.notice('Skipping stale review: the pull request changed or was closed during analysis.');
+              return;
+            }
+            const blocking = report.findings.some(finding => ['critical', 'high'].includes(finding.severity));
+            const medium = report.findings.some(finding => finding.severity === 'medium');
+            let event = blocking ? 'REQUEST_CHANGES' :
+              (!report.analysis_complete || medium ? 'COMMENT' : 'APPROVE');
+            const notes = [];
+            const ciResults = JSON.parse(process.env.CI_RESULTS_JSON || '{}');
+            const failedChecks = ['tests', 'sast', 'dependencies'].filter(name => ciResults[name]?.result !== 'success');
+            const ciContext = JSON.parse(fs.readFileSync(require('path').join(process.env.RUNNER_TEMP, 'code-review-evidence', 'ci-context.json'), 'utf8'));
+            if (ciContext.missing_reports.length) failedChecks.push('missing-reports');
+            if (failedChecks.length) {
+              if (event === 'APPROVE') event = 'COMMENT';
+              notes.push(`Verificações sem sucesso: ${failedChecks.join(', ')}. Aprovação não publicada.`);
+            }
+            if (!report.analysis_complete) notes.push('Análise incompleta: veja a limitação no resumo.');
+            if (pr.draft && event === 'APPROVE') {
+              event = 'COMMENT';
+              notes.push('PR em draft: aprovação adiada até estar pronto para revisão.');
+            }
+            const labels = { critical: 'CRÍTICA', high: 'ALTA', medium: 'MÉDIA', low: 'BAIXA' };
+            const decisions = { REQUEST_CHANGES: 'Solicitar alterações', COMMENT: 'Comentar', APPROVE: 'Aprovar' };
+            const findings = report.findings.map(finding =>
+              `- **[${labels[finding.severity]}] ${finding.title} — ${finding.file}:${finding.line}**\n` +
+              `  Impacto: ${finding.impact}\n  Correção: ${finding.correction}`);
+            const body = [report.summary, `Commit analisado: ${expectedSha}. Decisão: ${decisions[event]}.`,
+              ...notes, ...findings, ...(nonempty(report.details) ? [`<details>\n<summary>Detalhes da análise</summary>\n\n${report.details}\n\n</details>`] : [])].join('\n\n');
+            await github.rest.pulls.createReview({ ...params, commit_id: expectedSha, event, body });
+            core.setOutput('event', event);
+            core.setOutput('analysis_complete', String(report.analysis_complete));
+            core.info(`Formal review submitted: ${event} for ${expectedSha}`);
+      - name: Upload review evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: code-review-evidence-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/code-review-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
+  gate:
+    name: PR gate
+    needs: [validate, tests, sast, dependencies, review]
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate verification and review results
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        env:
+          RESULTS_JSON: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const results = JSON.parse(process.env.RESULTS_JSON);
+            const required = ['validate', 'tests', 'sast', 'dependencies'];
+            const failed = required.filter(name => results[name].result !== 'success');
+            const pr = context.payload.pull_request;
+            const reviewExpected = pr.head.repo.full_name === context.repo.owner + '/' + context.repo.repo &&
+              context.actor !== 'dependabot[bot]' && pr.user.login !== 'dependabot[bot]';
+            if (reviewExpected && (results.review.result !== 'success' ||
+                results.review.outputs.analysis_complete !== 'true' ||
+                !['APPROVE', 'COMMENT'].includes(results.review.outputs.event))) {
+              failed.push('review');
+            }
+            await core.summary.addHeading('Pull request pipeline').addTable([
+              [{ data: 'Stage', header: true }, { data: 'Result', header: true }],
+              ...Object.entries(results).map(([name, value]) => [name, value.result])
+            ]).addRaw(reviewExpected ? '' : '\nAutomated review unavailable for forks/Dependabot; manual review is required.\n').write();
+            if (failed.length) core.setFailed(`PR blocked by: ${failed.join(', ')}`);
