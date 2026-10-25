@@ -6,12 +6,15 @@ GitHub o seleciona pelo input `agent`.
 
 ## Contexto e escopo
 
-Leia [AGENTS.md](../../AGENTS.md), a
-[skill code-review](../skills/code-review/SKILL.md), as
+Leia [AGENTS.md](../../AGENTS.md), as
 [convenções de desenvolvimento](../development.md) e o diff com seus requisitos.
 Fixe a base e o commit analisado. Inspecione o código ao redor de cada achado.
 Considere somente problemas introduzidos ou agravados pelo PR; diferencie dívida
 preexistente. Avalie requisitos e padrões separadamente.
+
+Este perfil define a revisão automatizada. A [skill oficial code-review](../skills/code-review/SKILL.md)
+é um fluxo separado para uso interativo, com subagentes; não a invoque neste job,
+que mantém delegação desabilitada e usa o formato curto descrito abaixo.
 
 ## Verificações
 

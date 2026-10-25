@@ -1,47 +1,40 @@
 ---
 name: implement-spec
-description: Implemente uma especificação acordada em fatias com dependências explícitas, testes de comportamento e revisão final.
+description: "Implement the result of /to-spec and /to-tickets in code."
 disable-model-invocation: true
 ---
 
-# Implementar uma especificação
+You have been provided a spec. This spec should have tickets associated with it, describing how to implement the spec.
 
-Adaptação de Matt Pocock; origem e licença em [SOURCES.md](../../SOURCES.md).
+The issue tracker should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`.
 
-## Preparar
+The goal is the entire spec implemented on a single **integration branch**, with every ticket resolved the way the issue tracker closes work.
 
-Leia a especificação fornecida, `AGENTS.md` e o código afetado. Se não existir
-uma especificação formal, use os critérios acordados na conversa. Esclareça
-apenas lacunas que impeçam uma implementação correta.
+The tickets are not a list of steps. They are a **task graph** with blocking relationships between them. This means there is always a **frontier** of tickets which are ready to be grabbed.
 
-Confira a branch e o estado do Git; preserve alterações do usuário. Registre
-uma lista curta de fatias com critérios de conclusão e dependências. Trabalhe
-em branch própria quando necessário. Não é obrigatório ter tickets externos.
+Communication to and from subagents should be sparse. Communicate primarily through **context pointers**: to the spec, tickets, research notes, and previous commits. Don't duplicate information already available via pointers.
 
-## Executar
+**Implementer subagents** should be run in the background where possible for maximum concurrency.
 
-1. Escolha uma fatia cujas dependências estejam concluídas.
-2. Consulte [ruby-sinatra](../ruby-sinatra/SKILL.md) para as convenções locais
-   e [tdd](../tdd/SKILL.md) para mudanças de comportamento.
-3. Implemente a fatia e execute a validação pertinente antes da seguinte.
-4. Atualize o progresso com evidências: arquivos, comandos, resultados e
-   decisões. Não declare concluído um critério sem verificá-lo.
-5. Integre cada fatia preservando o estado funcional da branch.
+## Steps
 
-O padrão é execução sequencial. Se o usuário autorizar subagentes e a ferramenta
-oferecer suporte, distribua somente fatias independentes. Cada implementador
-deve receber os critérios, os arquivos de referência e uma área de escrita
-isolada em um worktree e uma branch próprios, baseados na branch de integração.
-Siga o [fluxo de worktrees](../../workflow.md#tarefas-com-multiagentes).
-Integre e valide os resultados antes de liberar trabalho dependente. Não
-delegue a edição simultânea do mesmo arquivo.
+1. Read the spec and tickets to understand the task graph.
 
-## Concluir
+2. (optional) Use an **exploration subagent** to conduct any exploration required by the tickets - relevant codebase files or external documentation. Ensure the exploration subagent can save files - it should save its markdown notes in a directory outside the repo, accessible by all future subagents. This lets **implementer subagents** focus on implementation rather than exploration.
 
-Execute os specs afetados e a suíte completa para mudanças Ruby. Em documentação,
-confira metadados, links e diff. Use [code-review](../code-review/SKILL.md),
-corrija os problemas relevantes e confira todos os critérios de aceitação.
+3. Create the integration branch. If the issue tracker closes work through PRs, or the user asks for one, open a draft PR after the first merge in step 5 (a branch with no commits ahead of main can't open one), marked as closing the spec and tickets.
 
-Entregue o resultado e as limitações de validação. Abra PR se solicitado, com
-destino confirmado e descrição dos resultados. Não faça merge, publique imagens
-ou feche tickets apenas por executar esta skill.
+4. Use **implementer subagents** to implement each ticket, each in its own worktree on its own branch. Each implementer subagent:
+   - confirms its worktree is based on the integration branch before starting, and resets onto it if not;
+   - calls the Skill tool with `tdd` to build the ticket;
+   - merges the integration branch tip into its own branch before reporting done
+
+5. Once an **implementer subagent** completes, merge its work to the integration branch with a **merger subagent**.
+
+6. If this changes the **frontier** of available tickets, kick off more **implementer subagents** to work on the new tickets. This allows for maximum concurrency.
+
+7. Once all tickets are complete, call the Skill tool with `code-review` on the integration branch. Fix all issues raised by the code review in a single **implementer subagent**.
+
+8. If a draft PR exists, mark it ready for review. Otherwise, resolve each ticket the way the issue tracker closes work, and report the integration branch.
+
+9. Clean up all **implementer subagent** worktrees.

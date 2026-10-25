@@ -1,66 +1,38 @@
 ---
 name: tdd
-description: Desenvolva funcionalidades ou corrija bugs Ruby e Sinatra com ciclos de teste falhando, implementação mínima e refatoração com RSpec e Rack::Test.
+description: Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions "red-green-refactor", or wants integration tests.
 ---
 
-# TDD com RSpec e Rack::Test
+# Test-Driven Development
 
-Adaptação de Matt Pocock; origem e licença em [SOURCES.md](../../SOURCES.md).
+TDD is the red → green loop. This skill is the reference that makes that loop produce tests worth keeping: what a good test is, where tests go, the anti-patterns, and the rules of the loop. Every section applies on every cycle: consult them before and during the loop, not after.
 
-## Escolher o comportamento
+When exploring the codebase, read `GLOSSARY.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.
 
-Leia `AGENTS.md`, o spec próximo e os critérios de aceitação. Use a fronteira
-HTTP existente como padrão para rotas: um usuário envia uma requisição e observa
-status, cabeçalhos, redirecionamento e HTML. Para um objeto Ruby com lógica
-própria, teste sua interface pública quando isso trouxer cobertura útil.
-Explicite decisões de teste que mudem o escopo acordado.
+## What a good test is
 
-## Um ciclo de cada vez
+Tests verify behavior through public interfaces, not implementation details. Code can change entirely; tests shouldn't. A good test reads like a specification: "user can checkout with valid cart" tells you exactly what capability exists, and it survives refactors because it doesn't care about internal structure.
 
-1. **Red:** escreva um exemplo que reproduza o bug ou comportamento necessário.
-   Execute-o e confirme que falha pelo motivo esperado. Erro de dependência,
-   sintaxe ou configuração não comprova a ausência do comportamento.
-2. **Green:** escreva apenas o código necessário para o exemplo passar e execute
-   novamente. Não escreva todos os testes e toda a implementação em dois lotes.
-3. **Refactor:** com os testes verdes, simplifique duplicações ou nomes que
-   surgiram nesta mudança e execute os specs afetados outra vez.
-4. Repita para o próximo cenário; ao terminar, execute a suíte completa.
+See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
 
-```sh
-RACK_ENV=test OTEL_TRACES_EXPORTER=none bundle exec rspec spec/features/home_spec.rb
-RACK_ENV=test OTEL_TRACES_EXPORTER=none bundle exec rspec
-# Reproduza falhas de ordem com o seed reportado pelo RSpec:
-RACK_ENV=test OTEL_TRACES_EXPORTER=none bundle exec rspec --seed 1234
-```
+## Seams: where tests go
 
-## Testes que valem manter
+A **seam** is the public boundary you test at: the interface where you observe behavior without reaching inside. Tests live at seams, never against internals.
 
-Este exemplo usa a configuração Rack::Test já presente em `spec_helper.rb`:
+**Test only at pre-agreed seams.** Before writing any test, write down the seams under test and confirm them with the user. No test is written at an unconfirmed seam. You can't test everything, so agreeing the seams up front is how testing effort lands on the critical paths and complex logic instead of every edge case.
 
-```ruby
-require 'spec_helper'
+Ask: "What's the public interface, and which seams should we test?" Give each proposed seam a one-line note on what it catches and what it misses.
 
-describe 'POST /' do
-  it 'redireciona para a galeria' do
-    post '/'
+When the shape of that interface is itself in question (how deep the module is, where the seam belongs, what the interface should expose), call the Skill tool with "codebase-design" for the vocabulary. It is the shared source of the module, interface, depth, seam, adapter, leverage and locality terms, and it is a reference to consult, not a session to run.
 
-    expect(last_response.status).to eq(302)
-    expect(last_response.headers['Location']).to end_with('/')
-  end
-end
-```
+## Anti-patterns
 
-- Use resultados independentes da implementação e nomes que descrevam o
-  comportamento. Não recalcule o valor esperado com o mesmo algoritmo do código.
-- Prepare dados pela interface pública. A coleção de imagens é compartilhada
-  no processo: não pressuponha ID 1, lista vazia ou ordem dos exemplos. Para
-  testar uma foto, crie-a e obtenha seu link pela resposta HTTP.
-- Não leia variáveis internas da aplicação nem teste chamadas a métodos privados.
-- Use doubles nas fronteiras externas quando necessário, como relógio,
-  aleatoriedade ou clientes remotos; mantenha os verificadores de doubles do
-  RSpec ativos. Não substitua toda a aplicação por mocks.
-- Não baixe imagens remotas para verificar o HTML e não exija coletor OTEL.
-- Mudanças somente documentais não precisam de exemplos RSpec sem comportamento.
+- **Implementation-coupled**: mocks internal collaborators, tests private methods, or verifies through a side channel (querying the database instead of using the interface). The tell: the test breaks when you refactor but behavior hasn't changed.
+- **Tautological**: the assertion recomputes the expected value the way the code does (`expect(add(a, b)).toBe(a + b)`, a snapshot derived by hand the same way, a constant asserted equal to itself), so it passes by construction and can never disagree with the code. Expected values must come from an independent source of truth: a known-good literal, a worked example, the spec.
+- **Horizontal slicing**: writing all tests first, then all implementation. Bulk tests verify _imagined_ behavior: you test the _shape_ of things rather than user-facing behavior, the tests go insensitive to real changes, and you commit to test structure before understanding the implementation. Work in **vertical slices** instead: one test → one implementation → repeat, each test a **tracer bullet** that responds to what the last cycle taught you.
 
-Registre o red observado, o green e o comando final. Se não for possível executar,
-informe o bloqueio; não apresente testes escritos como testes aprovados.
+## Rules of the loop
+
+- **Red before green.** Write the failing test first, then only enough code to pass it. Don't anticipate future tests or add speculative features.
+- **One slice at a time.** One seam, one test, one minimal implementation per cycle.
+- **Refactoring is not part of the loop.** It belongs to the review stage (see the `code-review` skill), not the red → green implementation cycle.

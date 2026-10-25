@@ -13,10 +13,12 @@ aprovadas. Use perguntas para decisões pendentes, não para fatos consultáveis
 
 | Situação | Skill local |
 | --- | --- |
+| Configurar as skills oficiais no projeto | [setup-matt-pocock-skills](skills/setup-matt-pocock-skills/SKILL.md) |
 | Esclarecer uma ideia ou decisão | [grill-me](skills/grill-me/SKILL.md) |
 | Converter decisões em uma especificação | [to-spec](skills/to-spec/SKILL.md) |
 | Executar uma especificação em fatias verificáveis | [implement-spec](skills/implement-spec/SKILL.md) |
 | Implementar ou corrigir comportamento com testes | [tdd](skills/tdd/SKILL.md) |
+| Preparar a descrição de um PR | [pr](skills/pr/SKILL.md) |
 | Trabalhar em rotas, ERB e middleware | [ruby-sinatra](skills/ruby-sinatra/SKILL.md) |
 | Revisar mudanças contra requisitos e convenções | [code-review](skills/code-review/SKILL.md) |
 
@@ -33,10 +35,17 @@ documentar → `implement-spec` usando `tdd` e `ruby-sinatra` → `code-review`.
 Para um bug pequeno, use diretamente `tdd`; não transforme toda tarefa em
 uma entrevista. As skills de entrevista e especificação são de uso explícito.
 
-Specs podem ser fornecidas na conversa ou salvas em `docs/specs/<tema>.md`
-quando fizer sentido versioná-las. `spec/` é reservado aos testes RSpec.
-Não é necessário configurar um issue tracker para usar estes fluxos. Crie
-issues ou publique documentos externos somente quando solicitado.
+Antes do primeiro uso das skills de engenharia, execute
+`/setup-matt-pocock-skills` no seu agente. A skill oficial configura o tracker e
+os documentos de domínio em `docs/agents/`, conforme o
+[guia de setup](https://www.aihero.dev/skills-setup-matt-pocock-skills).
+Instalar a skill não executa essa configuração; neste PR ela está disponível
+para uso, sem escolher um tracker ou criar issues por conta própria.
+
+As skills oficiais permanecem em inglês, com seus arquivos auxiliares e
+metadados originais. Regras de RSpec, Sinatra e formato da revisão automática
+ficam em [development.md](development.md), [review-tools.md](review-tools.md)
+e nos perfis, sem editar os arquivos do Matt Pocock. `spec/` é reservado a RSpec.
 
 ## Perfis de agentes
 
@@ -57,18 +66,30 @@ nativo conforme o formato suportado por ela. Um agente único também pode
 adotar cada perfil sequencialmente. Este diretório não habilita execução
 paralela, permissões ou acesso a serviços.
 
-## Origem e manutenção
+## Instalação e atualização
 
-Cinco skills são adaptações locais do trabalho de Matt Pocock, apresentado em
-[AI Hero](https://www.aihero.dev/skills). Veja [SOURCES.md](SOURCES.md) para
-revisão, arquivos de origem e alterações; a licença original está em
-[licenses/mattpocock-skills-MIT.txt](licenses/mattpocock-skills-MIT.txt).
-`ruby-sinatra` e os três perfis foram escritos para este projeto.
+Use o instalador oficial na raiz do projeto (Node.js/npm necessários apenas
+para instalar ou atualizar):
 
-Para atualizar, compare os arquivos de origem na revisão registrada com a
-nova revisão, revise as diferenças e aplique apenas as mudanças pertinentes.
-Preserve as adaptações Ruby/RSpec, atualize a referência e confira a licença.
-Não sobrescreva este conjunto com um instalador ou atualização automática.
+```sh
+npx skills@latest add mattpocock/skills --skill=tdd --agent codex --yes
+npx skills@latest add mattpocock/skills --skill=pr --agent codex --yes
+npx skills@latest add mattpocock/skills \
+  --skill grill-me grilling to-spec to-tickets implement-spec code-review \
+  codebase-design domain-modeling setup-matt-pocock-skills --agent codex --yes
+```
 
-Ao adicionar uma skill, use uma pasta cujo nome corresponda ao campo `name`,
-inclua uma descrição que explique quando usá-la e atualize o índice de skills neste arquivo. Confira metadados YAML, links relativos e `git diff --check`.
+A seleção `codex` usa `.agents/skills/`, também descoberta pelo OpenCode.
+As skills de apoio (`grilling`, `codebase-design`, `domain-modeling` e
+`to-tickets`) atendem às referências dos fluxos principais. Os arquivos são
+versionados para poderem ser usados sem acesso à rede.
+
+Não modifique as skills oficiais para aplicar regras locais. Atualize-as pelo
+instalador, revise o diff e registre a origem em [SOURCES.md](SOURCES.md).
+A licença está em [licenses/mattpocock-skills-MIT.txt](licenses/mattpocock-skills-MIT.txt).
+`ruby-sinatra` e os três perfis são conteúdo local do projeto.
+
+Nesta execução, `npx skills@latest` falhou com HTTP 503 no registro npm. Para
+substituir as adaptações sem alterar o conteúdo oficial, os arquivos foram
+obtidos diretamente do GitHub na revisão registrada, com hashes Git conferidos.
+Não foi gerado um lockfile de instalador nem declarada uma instalação npx bem-sucedida.
