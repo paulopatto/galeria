@@ -53,19 +53,21 @@ revisões duplicadas. Alterações no título do PR também disparam a validaç�
 
 ## Modelo, perfil e decisão formal
 
-O pipeline usa o OpenCode CLI **1.2.19**, instalado da release oficial com
-verificação SHA-256, e o modelo `opencode/big-pickle`. A versão é fixa para
-preservar o contrato de execução e os eventos JSON. Um servidor HTTP local é
-iniciado e verificado antes de conectar o cliente com `run --attach`, evitando
-o transporte interno do CLI. Atualizações automáticas e buscas adicionais do
-catálogo de modelos ficam desabilitadas nesse job. A execução do modelo é
-não interativa, tem limite de dez minutos e registra apenas marcos de progresso
-nos logs, sem imprimir argumentos, respostas do modelo ou conteúdo das ferramentas. O CLI recebe explicitamente
-`--agent code-reviewer`, registrado em [opencode.json](../opencode.json), com
-as regras em [code-reviewer](../.agents/agents/code-reviewer.md).
+O pipeline usa a action oficial do OpenCode, fixada em commit, e o modelo
+`opencode/big-pickle`. Seleciona `agent: code-reviewer`, registrado em
+[opencode.json](../opencode.json). O perfil [code-reviewer](../.agents/agents/code-reviewer.md),
+o diff exato e o contexto compacto do CI são incluídos diretamente no prompt.
+O contexto preserva todos os testes e achados novos; a dívida preexistente é
+resumida por gem/advisory. Relatórios completos permanecem nos artefatos.
 
-A resposta final do modelo é JSON, extraída dos eventos `text` do CLI e validada
-antes de usar a API de reviews. O workflow determina o evento:
+A action instala sua versão do CLI. O workflow limita a execução a dez minutos,
+desabilita compartilhamento público e não executa a aplicação ou seus testes no
+job com credenciais. A escrita em conteúdo do repositório permanece desabilitada.
+
+A resposta final do modelo é JSON. Um passo separado busca o comentário do bot
+com o identificador exato desta execução, valida o SHA e o schema, calcula o
+evento e publica um review legível. O comentário estruturado temporário é
+removido após a publicação formal, sem tocar em comentários de outras execuções.
 
 | Achados e evidências | Review formal |
 | --- | --- |
@@ -89,7 +91,7 @@ PR estar pronto. Aprovação não faz merge nem substitui os demais requisitos.
 
 1. Cadastre o repository secret `OPENCODE_API_KEY`, com acesso ao Big Pickle.
 2. Permita as actions referenciadas no pipeline, incluindo `actions/github-script`,
-   `ruby/setup-ruby`, release-drafter e Dorny.
+   `ruby/setup-ruby`, `anomalyco/opencode/github`, release-drafter e Dorny.
 3. Em **Settings → Actions → General → Workflow permissions**, habilite
    **Allow GitHub Actions to create and approve pull requests**, se permitido
    pela organização. O job de review usa `pull-requests: write`.
@@ -98,8 +100,10 @@ PR estar pronto. Aprovação não faz merge nem substitui os demais requisitos.
    esse resultado consolidado. Configure depois da primeira execução do novo check.
 
 Testes e scanners ficam em jobs isolados, sem `OPENCODE_API_KEY`. O job do modelo
-não recebe token GitHub no processo do CLI, não executa scripts ou testes do PR
-nem instala seu bundle. Apenas o passo de publicação usa o token de review.
+não executa scripts ou testes do PR nem instala seu bundle. A action usa o token
+para publicar a resposta temporária; o passo seguinte publica o review formal.
+A permissão `contents: read` impede push pelo token, e o workflow verifica que
+nenhum arquivo rastreado foi alterado antes de aceitar a análise.
 Checkout não persiste credenciais. A configuração mantém leitura de código;
 a escrita em PRs fica nos jobs de classificação e de publicação de review.
 
