@@ -4,11 +4,12 @@ RSpec.describe 'Integração HTTP com OpenTelemetry', type: :request do
   it 'registra a requisição real no coletor em memória' do
     get '/'
 
-    span = TEST_TRACE_EXPORTER.finished_spans.find do |candidate|
+    middleware_spans = TEST_TRACE_EXPORTER.finished_spans.select do |candidate|
       candidate.attributes['component'] == 'http'
     end
     expect(last_response.status).to eq(200)
-    expect(span).not_to be_nil
+    expect(middleware_spans.size).to eq(1)
+    span = middleware_spans.first
     expect(span.kind).to eq(:server)
     expect(span.attributes).to include(
       'http.method' => 'GET', 'http.route' => '/', 'http.status_code' => 200

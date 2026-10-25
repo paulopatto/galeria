@@ -6,14 +6,11 @@ require 'bundler/setup'
 require 'rspec'
 require 'rack/test'
 require 'yaml'
-require File.expand_path('../app', __dir__)
+require 'opentelemetry/sdk'
 require_relative 'support/fake_otlp_collector'
 
 # The real middleware and SDK write to a local replacement for the collector.
 TEST_TRACE_EXPORTER = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
-OpenTelemetry.tracer_provider.add_span_processor(
-  OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(TEST_TRACE_EXPORTER)
-)
 
 module RequestHelpers
   include Rack::Test::Methods
@@ -32,6 +29,25 @@ module RequestHelpers
 end
 
 RSpec.configure do |config|
+  original_provider = nil
+  suite_provider = nil
+
+  config.before(:suite) do
+    # Load and configure the application's SDK only when the suite starts.
+    original_provider = OpenTelemetry.tracer_provider
+    require File.expand_path('../app', __dir__)
+    suite_provider = OpenTelemetry.tracer_provider
+    suite_provider.add_span_processor(
+      OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(TEST_TRACE_EXPORTER)
+    )
+  end
+  config.after(:suite) do
+    begin
+      suite_provider.shutdown(timeout: 5) if suite_provider && !suite_provider.equal?(original_provider)
+    ensure
+      OpenTelemetry.tracer_provider = original_provider if original_provider
+    end
+  end
   config.include RequestHelpers
   config.before do
     # Route closures hold the data. Re-register them to start each scenario
