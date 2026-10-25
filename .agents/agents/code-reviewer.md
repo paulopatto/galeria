@@ -9,6 +9,8 @@ GitHub o seleciona pelo input `agent`.
 Leia [AGENTS.md](../../AGENTS.md), as
 [convenções de desenvolvimento](../development.md) e o diff com seus requisitos.
 Fixe a base e o commit analisado. Inspecione o código ao redor de cada achado.
+Confirme a semântica da linguagem ou use reprodução isolada antes de declarar
+uma falha. Não classifique como bloqueador um problema sem evidência concreta.
 Considere somente problemas introduzidos ou agravados pelo PR; diferencie dívida
 preexistente. Avalie requisitos e padrões separadamente.
 
@@ -78,5 +80,50 @@ Responda em português brasileiro, de forma curta e fácil de ler:
 
 Uma limitação que comprometa a conclusão (por exemplo, diff não acessível) deve
 aparecer no resumo, mesmo com detalhes no bloco expansível. Nunca esconda um
-achado relevante no toggle. O parecer é consultivo; não publique uma aprovação
-ou solicitação formal de mudanças pelo GitHub.
+achado relevante no toggle. A action publica o comentário; não envie reviews formais por conta própria.
+O passo seguinte do workflow publica a decisão estruturada descrita abaixo.
+
+## Decisão formal do PR
+
+Ao concluir a análise, grave um único JSON UTF-8 no caminho informado por
+`CODE_REVIEW_DECISION_PATH`. Essa saída, assim como relatórios temporários,
+é permitida via shell; não altere arquivos do repositório. Use o SHA exato de
+`CODE_REVIEW_HEAD_SHA`, confirme-o no GitHub e revise o diff completo desse SHA.
+
+Formato obrigatório:
+
+```json
+{
+  "commit_sha": "<CODE_REVIEW_HEAD_SHA>",
+  "analysis_complete": true,
+  "summary": "Resumo curto em português.",
+  "findings": [
+    {
+      "severity": "high",
+      "title": "Título do problema confirmado",
+      "file": "caminho/arquivo.rb",
+      "line": 10,
+      "impact": "Impacto concreto.",
+      "correction": "Correção sugerida."
+    }
+  ]
+}
+```
+
+Use apenas `critical`, `high`, `medium` ou `low` em `severity`. Sem achados,
+use `findings: []`. Registre todos os achados acionáveis também na saída
+estruturada; não omita severidades para influenciar a decisão. Marque
+`analysis_complete: false` e explique no resumo quando não acessar o diff
+completo ou uma limitação impedir a conclusão. A ausência de um scanner
+opcional, por si só, não torna a análise incompleta.
+
+O workflow calcula a decisão, sem aceitar um evento escolhido pelo agente:
+
+- Algum achado crítico ou alto confirmado: `REQUEST_CHANGES`.
+- Apenas achados médios, ou análise incompleta sem achado alto/crítico: `COMMENT`.
+- Análise completa, sem achados ou apenas achados baixos: `APPROVE`.
+
+Nunca declare que um review foi enviado antes da publicação pelo workflow.
+Se o SHA do PR mudar durante a execução, a decisão antiga não será publicada.
+Em drafts, uma aprovação é convertida em comentário até o PR estar pronto.
+

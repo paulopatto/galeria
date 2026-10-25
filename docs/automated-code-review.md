@@ -10,6 +10,7 @@ um prompt curto de execução; as regras ficam no agente e no
 
 O comentário é em português brasileiro: uma linha de resumo com o commit e
 somente achados acionáveis, com severidade, arquivo/linha, impacto e correção.
+Além do comentário, o workflow publica um review formal conforme a política abaixo.
 Comandos, versões, limitações e evidências ficam no toggle **Detalhes da análise**.
 Achados relevantes e limitações que comprometam a conclusão permanecem visíveis.
 Se não houver achados, o agente informa isso sem gerar seções vazias.
@@ -21,12 +22,17 @@ Se não houver achados, o agente informa isso sem gerar seções vazias.
 2. No repositório, abra **Settings → Secrets and variables → Actions → New
    repository secret** e salve a chave como `OPENCODE_API_KEY`.
 3. Habilite GitHub Actions e permita as actions `actions/checkout` e
-   `anomalyco/opencode/github` e `actions/upload-artifact`, caso exista uma política
+   `anomalyco/opencode/github`, `actions/github-script` e `actions/upload-artifact`, caso exista uma política
    de restrição de actions.
    A política da organização também precisa permitir `pull-requests: write` e
    `issues: write`.
-4. Abra ou atualize um PR de uma branch deste repositório e confira o job
-   **review** na aba **Actions** e o comentário no PR.
+4. Em **Settings → Actions → General → Workflow permissions**, habilite
+   **Allow GitHub Actions to create and approve pull requests**, se permitido
+   pela política da organização. O token precisa de `pull-requests: write`.
+5. Abra ou atualize um PR de uma branch deste repositório e confira o job
+   **review**, o comentário e o review formal no PR. Se o GitHub negar a criação
+   do review (por política ou por autorrevisão), o passo falha explicitamente;
+   o workflow não considera a aprovação concluída.
 
 O workflow usa `use_github_token: true` e o `GITHUB_TOKEN` temporário fornecido
 pelo GitHub. Não é necessário instalar o GitHub App do OpenCode, criar um PAT ou
@@ -49,9 +55,19 @@ OpenCode fica desabilitado (`share: false`).
   anteriores podem permanecer: confira o commit e a execução correspondentes.
 - O review apresenta resumo, achados com severidade, arquivo/linha, impacto e
   sugestão de correção, além das ferramentas executadas e limitações.
-- O parecer é consultivo. Achados não bloqueiam automaticamente o merge nem
-  equivalem a uma aprovação. Não configure esse workflow como check obrigatório
-  sem considerar sua dependência do serviço externo e as exceções abaixo.
+- O agente grava `decision.json` no diretório de evidências com o SHA analisado,
+  conclusão da análise e achados estruturados. Um passo separado valida o schema
+  e calcula o evento; o agente não escolhe diretamente a aprovação.
+- Crítica ou alta: **Solicitar alterações** (`REQUEST_CHANGES`).
+- Somente médias: **Comentar** (`COMMENT`), sem aprovação nem solicitação de alterações.
+- Análise completa sem achados ou somente baixas: **Aprovar** (`APPROVE`).
+- Análise incompleta sem achado crítico/alto: somente comentário. JSON ausente,
+  inválido ou de outro SHA falha o passo, sem publicar aprovação.
+- Antes de publicar, o workflow confere o SHA atual do PR. Se a branch mudou ou
+  o PR foi fechado, a decisão antiga é descartada. Em drafts, uma aprovação é
+  convertida em comentário até o evento `ready_for_review`.
+- A aprovação não faz merge nem dispensa outras revisões ou checks obrigatórios.
+  O efeito de uma solicitação de alterações depende das regras do repositório.
 
 PRs de forks e do Dependabot executam apenas o job **unavailable**, que explica
 a ausência de review no resumo do Actions. Nesses eventos, o GitHub normalmente
@@ -79,8 +95,9 @@ O workflow não instala Playwright, browsers ou servidores MCP.
 
 Screenshots e relatórios pertinentes devem ser gravados em
 `$RUNNER_TEMP/code-review-evidence`. A action publica essa pasta como artefato
-`code-review-evidence-<PR>-<tentativa>`, com retenção de sete dias. Sem arquivos,
-o upload é ignorado. Nunca inclua tokens, sessões, dados pessoais ou logs completos.
+`code-review-evidence-<PR>-<tentativa>`, com retenção de sete dias. A saída
+estruturada `decision.json` também fica nesse artefato. Sem arquivos, o upload
+é ignorado. Nunca inclua tokens, sessões, dados pessoais ou logs completos.
 
 ## Diagnóstico e manutenção
 
@@ -110,3 +127,4 @@ ou dados pessoais no código ou nos comentários.
 
 Referências: [integração GitHub e exemplo de PR](https://opencode.ai/docs/github/#pull-request-example)
 e [modelos e privacidade](https://opencode.ai/v2/docs/console/models/).
+
