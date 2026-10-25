@@ -1,0 +1,59 @@
+name: Functional, integration and acceptance tests
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: RSpec (Ruby 2.6.2)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      checks: write
+    env:
+      RACK_ENV: test
+      OTEL_TRACES_EXPORTER: none
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - name: Run functional, integration and acceptance tests
+        run: |
+          mkdir -p tmp/test-results
+          bundle exec rspec --format progress --format json --out tmp/test-results/rspec.json
+      - name: Generate JUnit report
+        if: ${{ !cancelled() && hashFiles('tmp/test-results/rspec.json') != '' }}
+        run: bundle exec ruby script/rspec_to_junit.rb tmp/test-results/rspec.json tmp/test-results/rspec.xml
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rspec-results
+          path: tmp/test-results/
+          if-no-files-found: warn
+      # Fork pull requests have a read-only token; their XML remains available
+      # as an artifact. Never use pull_request_target to execute PR code.
+      - name: Publish test report
+        if: >-
+          ${{ !cancelled() && hashFiles('tmp/test-results/rspec.xml') != '' &&
+              (github.event_name != 'pull_request' ||
+               github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: dorny/test-reporter@v2
+        with:
+          name: Functional, integration and acceptance results
+          path: tmp/test-results/rspec.xml
+          reporter: java-junit
+          list-suites: all
+          list-tests: failed
