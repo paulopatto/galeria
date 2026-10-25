@@ -9,7 +9,7 @@ Os jobs e o relatório detalhado dos testes continuam visíveis para diagnóstic
 flowchart TD
   A[PR type / release-drafter] --> B[Tests]
   A --> C[SAST / Semgrep]
-  A --> D[Dependencies / Dependency Review]
+  A --> D[Dependencies / bundler-audit]
   B --> E[Code review com contexto do CI]
   C --> E
   D --> E
@@ -24,10 +24,14 @@ flowchart TD
 2. **Tests:** executa RSpec no Ruby 2.6.2 com nomes dos cenários nos logs,
    gera JSON/JUnit e publica todos os cenários via `dorny/test-reporter`.
 3. **SAST** e **Dependencies:** rodam em paralelo com os testes. Semgrep usa o
-   conjunto mantido `p/ruby`, sem instalar gems da aplicação. Dependency Review
-   verifica vulnerabilidades introduzidas pelas alterações nas dependências e
-   falha a partir de severidade moderada. Não exige atualizar dívida preexistente
-   que não foi introduzida pelo PR. Erros de instalação, rede ou análise falham o job.
+   conjunto mantido `p/ruby`, sem instalar gems da aplicação. O bundler-audit
+   verifica o lockfile da base e do PR contra a mesma base de advisories atualizada.
+   Compara gem/advisory, registra a dívida preexistente e bloqueia vulnerabilidades
+   introduzidas de severidade média ou maior, severidade desconhecida e fontes
+   inseguras. Baixas ficam no relatório. Erros de instalação, rede ou análise
+   falham o job. O scanner usa Ruby 3.3 em job próprio; a aplicação e seus testes
+   continuam no Ruby 2.6.2. Nenhum Gemfile é avaliado ou bundle da aplicação instalado
+   pelo scanner. Não depende de habilitar Dependency graph no GitHub.
 4. **Code review:** aguarda esses três jobs, inclusive quando falham. Baixa os
    relatórios da mesma execução, prepara `ci-context.json` com seus resultados,
    nomes/status de cada teste, falhas, pendências, SAST e dependências. O modelo
@@ -40,7 +44,7 @@ flowchart TD
 
 A configuração [Dependabot](../.github/dependabot.yml) abre PRs semanais para
 Bundler e GitHub Actions, com títulos Conventional Commits. O Dependabot não
-é um scanner executado dentro de cada PR; essa função é do Dependency Review.
+é um scanner executado dentro de cada PR; essa função é da auditoria do lockfile.
 A configuração passa a vigorar depois de chegar à branch padrão.
 
 O workflow de testes em push da `master` e por acionamento manual continua
@@ -80,7 +84,7 @@ PR estar pronto. Aprovação não faz merge nem substitui os demais requisitos.
 
 1. Cadastre o repository secret `OPENCODE_API_KEY`, com acesso ao Big Pickle.
 2. Permita as actions referenciadas no pipeline, incluindo `actions/github-script`,
-   `actions/dependency-review-action`, `ruby/setup-ruby`, release-drafter e Dorny.
+   `ruby/setup-ruby`, release-drafter e Dorny.
 3. Em **Settings → Actions → General → Workflow permissions**, habilite
    **Allow GitHub Actions to create and approve pull requests**, se permitido
    pela organização. O job de review usa `pull-requests: write`.
@@ -123,4 +127,4 @@ sessões públicas compartilhadas, mas isso não altera a política do provedor.
 Referências: [OpenCode CLI](https://opencode.ai/docs/cli/),
 [modelos e privacidade](https://opencode.ai/v2/docs/console/models/),
 [Semgrep](https://semgrep.dev/docs/semgrep-ci/overview) e
-[Dependency Review](https://github.com/actions/dependency-review-action).
+[bundler-audit](https://github.com/rubysec/bundler-audit).
