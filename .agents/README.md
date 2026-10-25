@@ -77,6 +77,8 @@ npx skills@latest add mattpocock/skills --skill=pr --agent codex --yes
 npx skills@latest add mattpocock/skills \
   --skill grill-me grilling to-spec to-tickets implement-spec code-review \
   codebase-design domain-modeling setup-matt-pocock-skills --agent codex --yes
+npx skills@latest add DietrichGebert/ponytail --skill '*' --agent codex --yes
+npx skills@latest add JuliusBrussee/caveman --skill '*' --agent codex --yes
 ```
 
 A seleção `codex` usa `.agents/skills/`, também descoberta pelo OpenCode.
@@ -88,6 +90,9 @@ Não modifique as skills oficiais para aplicar regras locais. Atualize-as pelo
 instalador, revise o diff e registre a origem em [SOURCES.md](SOURCES.md).
 A licença está em [licenses/mattpocock-skills-MIT.txt](licenses/mattpocock-skills-MIT.txt).
 `ruby-sinatra` e os três perfis são conteúdo local do projeto.
+
+As skills Ponytail e Caveman também são mantidas sem adaptações locais. O
+instalador registra suas versões e hashes em [`skills-lock.json`](../skills-lock.json).
 
 Nesta execução, `npx skills@latest` falhou com HTTP 503 no registro npm. Para
 substituir as adaptações sem alterar o conteúdo oficial, os arquivos foram
