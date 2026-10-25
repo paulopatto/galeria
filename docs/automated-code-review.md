@@ -13,15 +13,17 @@ comentário no próprio PR. O prompt fica no campo `prompt` do workflow e a resp
    repository secret** e salve a chave como `OPENCODE_API_KEY`.
 3. Habilite GitHub Actions e permita as actions `actions/checkout` e
    `anomalyco/opencode/github`, caso exista uma política de restrição de actions.
-   A política da organização também precisa permitir `issues: write`.
+   A política da organização também precisa permitir `pull-requests: write` e
+   `issues: write`.
 4. Abra ou atualize um PR de uma branch deste repositório e confira o job
    **review** na aba **Actions** e o comentário no PR.
 
 O workflow usa `use_github_token: true` e o `GITHUB_TOKEN` temporário fornecido
 pelo GitHub. Não é necessário instalar o GitHub App do OpenCode, criar um PAT ou
-configurar OIDC. As permissões são `contents: read`, `pull-requests: read` e
-`issues: write`; esta última permite reações e comentários pela API de issues,
-que também atende comentários de PRs. Não há permissão para publicar commits.
+configurar OIDC. As permissões são `contents: read`, `pull-requests: write` e
+`issues: write`. Comentários e reações usam endpoints de issues, mas o recurso
+revisado é um pull request e precisa de acesso de escrita em pull requests.
+`contents: read` impede a publicação de commits com esse token.
 O checkout não persiste credenciais e o compartilhamento público de sessões
 OpenCode fica desabilitado (`share: false`).
 
@@ -77,7 +79,13 @@ vulnerabilidades nem devem gerar pedidos de upgrade fora do escopo do PR.
 - **Secret ausente:** o passo **Check OpenCode credentials** falha com instruções;
   cadastre `OPENCODE_API_KEY` e use **Re-run jobs**.
 - **401/403 do provedor:** confira a validade da chave e o acesso a Big Pickle
-  no Console. **403 do GitHub:** confira a política de permissões de Actions.
+  no Console. **403 do GitHub ao reagir/comentar:** confira em **Set up job →
+  GITHUB_TOKEN Permissions** se `PullRequests: write` e `Issues: write` estão
+  presentes. `permission: admin` no log é a permissão do usuário que disparou a
+  execução, não a do token da action. Após corrigir o workflow, use a execução
+  disparada pelo novo commit: reexecutar um run antigo reutiliza sua revisão do
+  workflow e pode preservar a configuração incorreta. Se as permissões efetivas
+  continuarem somente de leitura, confira a política de Actions da organização.
 - **Rate limit, timeout ou indisponibilidade:** consulte os logs e tente
   **Re-run jobs**. Não considere o PR revisado se não houver resposta completa.
 - **PR já aberto antes da inclusão do workflow:** envie um novo commit ou

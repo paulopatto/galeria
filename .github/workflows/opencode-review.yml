@@ -22,7 +22,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      pull-requests: read
+      # PR comments/reactions need write access to the pull request resource.
+      pull-requests: write
       issues: write
     steps:
       - name: Check OpenCode credentials
