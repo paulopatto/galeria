@@ -1,7 +1,9 @@
 function parseComment(comment) {
-  const text = comment.body.split(/\n+\[github run\]\(/)[0].trim()
-    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  return JSON.parse(text);
+  return parseText(comment.body.split(/\n+\[github run\]\(/)[0]);
+}
+
+function parseText(text) {
+  return JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
 }
 
 function validFinding(finding) {
@@ -44,4 +46,21 @@ function selectReview(comments, runId, expectedSha) {
     reason: selected ? 'valid-decision' : reason };
 }
 
-module.exports = { selectReview, validReport };
+function selectResponse(output, expectedSha) {
+  const lines = output.split('\n').filter(Boolean);
+  let reason = lines.length ? 'invalid-json' : 'no-response';
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line);
+      if (event.type !== 'text') continue;
+      const report = parseText(event.part?.text || event.text || '');
+      if (validReport(report, expectedSha)) return { comment: null, report, invalidCommentIds: [], reason: 'valid-decision' };
+      reason = 'invalid-schema';
+    } catch (_) {
+      reason = 'invalid-json';
+    }
+  }
+  return { comment: null, report: null, invalidCommentIds: [], reason };
+}
+
+module.exports = { selectReview, selectResponse, validReport };

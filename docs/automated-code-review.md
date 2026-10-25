@@ -54,7 +54,8 @@ revisões duplicadas. Alterações no título do PR também disparam a validaç�
 
 ## Revisão curta com fallback explícito
 
-O pipeline usa a action oficial do OpenCode, sem API direta, nesta ordem:
+O pipeline instala o CLI oficial do OpenCode e usa `opencode run --format json`,
+sem API direta, nesta ordem:
 
 1. `opencode/big-pickle`;
 2. `opencode/beam-free`;
@@ -131,7 +132,8 @@ Uma análise incompleta ou pedido de alterações reprova o `PR gate`.
 1. Cadastre o repository secret `OPENCODE_API_KEY`, com acesso ao Big Pickle e à
    assinatura OpenCode Go para os fallbacks DeepSeek e GPT-6 Luna.
 2. Permita as actions referenciadas no pipeline, incluindo `actions/github-script`,
-   `ruby/setup-ruby`, `anomalyco/opencode/github`, release-drafter e Dorny.
+   `ruby/setup-ruby`, release-drafter e Dorny. O CLI do OpenCode é instalado pelo
+   instalador oficial durante o job de revisão.
 3. Em **Settings → Actions → General → Workflow permissions**, habilite
    **Allow GitHub Actions to create and approve pull requests**, se permitido
    pela organização. O job de review usa `pull-requests: write`.
@@ -140,8 +142,9 @@ Uma análise incompleta ou pedido de alterações reprova o `PR gate`.
    esse resultado consolidado. Configure depois da primeira execução do novo check.
 
 Testes e scanners ficam em jobs isolados, sem `OPENCODE_API_KEY`. O job do modelo
-não executa scripts ou testes do PR nem instala seu bundle. A action usa o token GitHub para a resposta temporária e o passo separado
-publica o review formal. O modelo não possui ferramentas para acessar o token
+não executa scripts ou testes do PR nem instala seu bundle. O CLI escreve a resposta
+estruturada apenas no artefato temporário e o passo separado publica o review formal.
+O modelo não possui ferramentas para acessar o token
 ou o ambiente; o job não tem permissão para push. Nenhum script do PR é executado
 com as credenciais do provedor.
 Checkout não persiste credenciais. A configuração mantém leitura de código;

@@ -1,14 +1,12 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { selectReview } = require('./review_output_validator');
+const { selectReview, selectResponse } = require('./review_output_validator');
 
 const root = path.join(__dirname, '..');
 const workflow = fs.readFileSync(path.join(root, '.github/workflows/pull-request.yaml'), 'utf8');
-const models = workflow.split('      - name: Review with ').slice(1).map(section => {
-  const match = section.match(/^.*?^          model: (opencode(?:-go)?\/[^\s]+)$/ms);
-  return match && match[1];
-});
+const models = [...workflow.matchAll(/run: bash script\/run_review_model\.sh (opencode(?:-go)?\/[^\s]+)/g)]
+  .map(match => match[1]);
 assert.deepStrictEqual(models, [
   'opencode/big-pickle',
   'opencode/beam-free',
@@ -20,6 +18,7 @@ assert(workflow.includes('timeout-minutes: 5'));
 assert(workflow.includes('id: scope'));
 assert(workflow.includes('Require one valid review decision'));
 assert(workflow.includes("steps.scope.outputs.review_required == 'true'"));
+assert(workflow.includes('Install OpenCode CLI'));
 
 const runId = '123';
 const sha = 'abc';
@@ -36,4 +35,7 @@ assert.deepStrictEqual(selected.invalidCommentIds, [1]);
 const absent = selectReview([{ ...comments[0], id: 4, updated_at: '2026-10-25T10:03:00Z' }], runId, sha);
 assert.strictEqual(absent.comment, null);
 assert.deepStrictEqual(absent.invalidCommentIds, [4]);
+const response = selectResponse(JSON.stringify({ type: 'text', part: { text: JSON.stringify(valid) } }), sha);
+assert.deepStrictEqual(response.report, valid);
+assert.strictEqual(selectResponse('', sha).reason, 'no-response');
 console.log('Fallback workflow configuration and structured-output validation passed.');

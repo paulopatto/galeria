@@ -388,21 +388,20 @@ jobs:
             core.setOutput('prompt', request.messages[1].content);
             if (metadata.cache_hit) fs.writeFileSync(path.join(directory, 'usage.json'), JSON.stringify({ model_rounds: 0, cache_hit: true }));
             core.info(`Review input: ${promptBytes} bytes; reused decision: ${metadata.cache_hit}.`);
+      - name: Install OpenCode CLI
+        if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
       - name: Review with Big Pickle
         id: big_pickle
         if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
         continue-on-error: true
         timeout-minutes: 1
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          model: opencode/big-pickle
-          agent: code-reviewer
-          use_github_token: true
-          share: false
-          prompt: ${{ steps.prepare.outputs.prompt }}
+          REVIEW_PROMPT: ${{ steps.prepare.outputs.prompt }}
+        run: bash script/run_review_model.sh opencode/big-pickle "$RUNNER_TEMP/code-review-evidence/big-pickle.jsonl"
       - name: Validate Big Pickle output
         id: big_pickle_output
         if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
@@ -412,6 +411,7 @@ jobs:
           action-outcome: ${{ steps.big_pickle.outcome }}
           head-sha: ${{ github.event.pull_request.head.sha }}
           evidence-directory: ${{ runner.temp }}/code-review-evidence
+          response-file: ${{ runner.temp }}/code-review-evidence/big-pickle.jsonl
       - name: Review with Beam Free
         id: beam_free
         if: >-
@@ -419,16 +419,10 @@ jobs:
               steps.big_pickle_output.outputs.valid != 'true' }}
         continue-on-error: true
         timeout-minutes: 1
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          model: opencode/beam-free
-          agent: code-reviewer
-          use_github_token: true
-          share: false
-          prompt: ${{ steps.prepare.outputs.prompt }}
+          REVIEW_PROMPT: ${{ steps.prepare.outputs.prompt }}
+        run: bash script/run_review_model.sh opencode/beam-free "$RUNNER_TEMP/code-review-evidence/beam-free.jsonl"
       - name: Validate Beam Free output
         id: beam_free_output
         if: >-
@@ -440,6 +434,7 @@ jobs:
           action-outcome: ${{ steps.beam_free.outcome }}
           head-sha: ${{ github.event.pull_request.head.sha }}
           evidence-directory: ${{ runner.temp }}/code-review-evidence
+          response-file: ${{ runner.temp }}/code-review-evidence/beam-free.jsonl
       - name: Review with DeepSeek V4.1 Flash
         id: deepseek
         if: >-
@@ -447,16 +442,10 @@ jobs:
               steps.big_pickle_output.outputs.valid != 'true' && steps.beam_free_output.outputs.valid != 'true' }}
         continue-on-error: true
         timeout-minutes: 1
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          model: opencode-go/deepseek-v4.1-flash
-          agent: code-reviewer
-          use_github_token: true
-          share: false
-          prompt: ${{ steps.prepare.outputs.prompt }}
+          REVIEW_PROMPT: ${{ steps.prepare.outputs.prompt }}
+        run: bash script/run_review_model.sh opencode-go/deepseek-v4.1-flash "$RUNNER_TEMP/code-review-evidence/deepseek-v4.1-flash.jsonl"
       - name: Validate DeepSeek V4.1 Flash output
         id: deepseek_output
         if: >-
@@ -468,6 +457,7 @@ jobs:
           action-outcome: ${{ steps.deepseek.outcome }}
           head-sha: ${{ github.event.pull_request.head.sha }}
           evidence-directory: ${{ runner.temp }}/code-review-evidence
+          response-file: ${{ runner.temp }}/code-review-evidence/deepseek-v4.1-flash.jsonl
       - name: Review with GPT-6 Luna
         id: gpt_luna
         if: >-
@@ -476,16 +466,10 @@ jobs:
               steps.deepseek_output.outputs.valid != 'true' }}
         continue-on-error: true
         timeout-minutes: 1
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          model: opencode-go/gpt-6-luna
-          agent: code-reviewer
-          use_github_token: true
-          share: false
-          prompt: ${{ steps.prepare.outputs.prompt }}
+          REVIEW_PROMPT: ${{ steps.prepare.outputs.prompt }}
+        run: bash script/run_review_model.sh opencode-go/gpt-6-luna "$RUNNER_TEMP/code-review-evidence/gpt-6-luna.jsonl"
       - name: Validate GPT-6 Luna output
         id: gpt_luna_output
         if: >-
@@ -498,6 +482,7 @@ jobs:
           action-outcome: ${{ steps.gpt_luna.outcome }}
           head-sha: ${{ github.event.pull_request.head.sha }}
           evidence-directory: ${{ runner.temp }}/code-review-evidence
+          response-file: ${{ runner.temp }}/code-review-evidence/gpt-6-luna.jsonl
       - name: Require one valid review decision
         if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
