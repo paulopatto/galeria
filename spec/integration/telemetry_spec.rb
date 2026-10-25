@@ -64,4 +64,15 @@ RSpec.describe 'Integração HTTP com OpenTelemetry', type: :request do
       collector.stop if collector
     end
   end
+  it 'rejeita gzip inválido com diagnóstico no coletor HTTP simulado' do
+    collector = FakeOtlpCollector.new.start
+    response = Net::HTTP.post(URI(collector.endpoint), 'invalid gzip body', 'Content-Encoding' => 'gzip')
+
+    expect(response.code).to eq('400')
+    expect(response.body).to include('Invalid gzip payload')
+    expect { collector.request }.to raise_error(FakeOtlpCollector::InvalidRequest, /Invalid gzip payload/)
+  ensure
+    collector.stop if collector
+  end
+
 end
