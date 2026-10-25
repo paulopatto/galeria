@@ -51,23 +51,46 @@ O workflow de testes em push da `master` e por acionamento manual continua
 separado. O workflow antigo de review é substituído pelo pipeline para evitar
 revisões duplicadas. Alterações no título do PR também disparam a validação.
 
-## Modelo, perfil e decisão formal
+## Revisão em uma chamada, com orçamento explícito
 
-O pipeline usa a action oficial do OpenCode, fixada em commit, e o modelo
-`opencode/big-pickle`. Seleciona `agent: code-reviewer`, registrado em
-[opencode.json](../opencode.json). O perfil [code-reviewer](../.agents/agents/code-reviewer.md),
-o diff exato e o contexto compacto do CI são incluídos diretamente no prompt.
-O contexto preserva todos os testes e achados novos; a dívida preexistente é
-resumida por gem/advisory. Relatórios completos permanecem nos artefatos.
+A revisão automática usa o mesmo modelo **Big Pickle**, pela API oficial
+OpenCode Zen (`/zen/v1/chat/completions`) e o secret `OPENCODE_API_KEY` existente.
+O [perfil curto](../.agents/agents/code-reviewer.md) é enviado uma única vez como
+instrução de sistema, acompanhado do diff e de um resumo determinístico do CI.
+Não há CLI, sessões, ferramentas, navegação, scanners repetidos, delegação,
+conversa com comentários anteriores ou comentários temporários para extrair JSON.
 
-A action instala sua versão do CLI. O workflow limita a execução a dez minutos,
-desabilita compartilhamento público e não executa a aplicação ou seus testes no
-job com credenciais. A escrita em conteúdo do repositório permanece desabilitada.
+- **Uma chamada por revisão nova**, sem tentativas automáticas.
+- **90 segundos** para resposta completa; o passo do Actions limita-se a dois minutos.
+- **2.000 tokens de saída** solicitados ao provedor. Resposta truncada não é aceita.
+- **100 KB de entrada UTF-8**, sem truncar o diff silenciosamente. PRs que excedam
+  o orçamento devem ser divididos ou revisados manualmente; não são autoaprovados.
+- O modelo recebe contagens de testes e somente falhas/pendências, achados SAST e
+  dependências introduzidas. Até dez detalhes por categoria; contagens e omissões
+  são explícitas. Todos os cenários e resultados completos continuam nos artefatos.
+- `Gemfile.lock` fica fora do prompt: sua análise pertence ao job de dependências.
+  Os demais arquivos de texto alterados continuam no diff completo enviado.
+- `usage.json` registra tempo, quantidade de requisições e tokens informados pelo
+  provedor; `review-metadata.json` registra tamanho da entrada e uso do cache.
 
-A resposta final do modelo é JSON. Um passo separado busca o comentário do bot
-com o identificador exato desta execução, valida o SHA e o schema, calcula o
-evento e publica um review legível. O comentário estruturado temporário é
-removido após a publicação formal, sem tocar em comentários de outras execuções.
+O prazo e o limite de saída não garantem disponibilidade do provedor nem um custo
+fixo. O uso real é medido quando a API o informa. Timeout, erro HTTP, resposta
+inválida ou truncada falham a revisão sem retry e sem aprovação por fallback.
+
+### Reutilização sem nova análise
+
+O review publicado contém uma marca de cache com hash da base, HEAD, modelo,
+perfil e contexto compacto do CI. A reutilização aceita apenas a última revisão
+do bot para o mesmo HEAD, com análise completa e hash idêntico. Não usa comentários
+de usuários nem reviews descartados. Tempo de teste e ordem aleatória dos cenários
+não alteram o hash; uma mudança na base, código, política ou resultados o invalida.
+
+Assim, editar título/descrição ou repetir uma execução idêntica não consome novos
+tokens de review nem publica reviews duplicados. Os jobs de verificação continuam
+executando normalmente. A decisão reutilizada passa novamente pela validação de
+schema, pelo SHA atual, pelo estado de draft e pelos resultados atuais do CI.
+
+### Decisão formal
 
 | Achados e evidências | Review formal |
 | --- | --- |
@@ -76,22 +99,17 @@ removido após a publicação formal, sem tocar em comentários de outras execu�
 | Sem achados ou apenas baixos, com análise completa e CI verde | Aprovar (`APPROVE`) |
 | Análise incompleta ou verificações sem sucesso, sem alto/crítico | Comentar, sem aprovação |
 
-O resumo e os achados ficam visíveis no review. Comandos, versões, limitações e
-links pertinentes ficam no toggle **Detalhes da análise**. O perfil exige
-reproduzir ou confirmar a semântica antes de repetir um alerta; comentários de
-execuções anteriores não são evidência de que o problema ainda existe.
-
-JSON inválido, execução sem decisão, erro do modelo ou rejeição da API falham o
-job; não há aprovação por fallback. Antes da publicação, o workflow confere o
-SHA atual e associa o review ao SHA analisado. Se o PR mudou ou foi fechado,
-a decisão antiga é descartada. Em drafts, uma aprovação vira comentário até o
-PR estar pronto. Aprovação não faz merge nem substitui os demais requisitos.
+O resumo e os achados ficam no review, associados ao SHA analisado. O modelo não
+escolhe o evento, não executa código e não recebe ferramentas. A publicação é um
+passo separado com validação estrita. Se o PR mudar ou fechar durante a execução,
+a decisão antiga é descartada. Em drafts, a aprovação é adiada com comentário.
+Uma análise incompleta ou pedido de alterações reprova o `PR gate`.
 
 ## Configuração no GitHub
 
 1. Cadastre o repository secret `OPENCODE_API_KEY`, com acesso ao Big Pickle.
 2. Permita as actions referenciadas no pipeline, incluindo `actions/github-script`,
-   `ruby/setup-ruby`, `anomalyco/opencode/github`, release-drafter e Dorny.
+   `ruby/setup-ruby`, release-drafter e Dorny.
 3. Em **Settings → Actions → General → Workflow permissions**, habilite
    **Allow GitHub Actions to create and approve pull requests**, se permitido
    pela organização. O job de review usa `pull-requests: write`.
@@ -100,10 +118,9 @@ PR estar pronto. Aprovação não faz merge nem substitui os demais requisitos.
    esse resultado consolidado. Configure depois da primeira execução do novo check.
 
 Testes e scanners ficam em jobs isolados, sem `OPENCODE_API_KEY`. O job do modelo
-não executa scripts ou testes do PR nem instala seu bundle. A action usa o token
-para publicar a resposta temporária; o passo seguinte publica o review formal.
-A permissão `contents: read` impede push pelo token, e o workflow verifica que
-nenhum arquivo rastreado foi alterado antes de aceitar a análise.
+não executa scripts ou testes do PR nem instala seu bundle. A requisição HTTPS
+não recebe token GitHub: usa apenas a API key do provedor. A escrita em PRs é
+usada pelo passo separado de publicação; o job não tem permissão para push.
 Checkout não persiste credenciais. A configuração mantém leitura de código;
 a escrita em PRs fica nos jobs de classificação e de publicação de review.
 
@@ -117,12 +134,12 @@ checkout de código do contribuidor para contornar essa restrição.
 - `pr-test-reports`: JSON/JUnit com todos os testes, inclusive falhas e pendências.
 - `pr-sast-reports`: JSON do Semgrep.
 - `pr-dependency-reports`: alterações de dependências e vulnerabilidades detectadas.
-- `code-review-evidence-<PR>-<tentativa>`: contexto do CI, diff e decisão estruturada,
+- `code-review-evidence-<PR>-<tentativa>`: contexto compacto, diff, requisição sem credenciais, decisão e métricas,
   com retenção de sete dias. Não publique tokens, sessões ou dados pessoais.
 
-Scanners opcionais do agente seguem o [guia de ferramentas](../.agents/review-tools.md).
-Eles complementam a evidência; não executam a aplicação no job com a API key.
-Playwright só se aplica a preview autorizado e não é instalado pelo pipeline.
+A revisão automática não executa scanners opcionais nem Playwright. Verificações
+interativas adicionais podem seguir o [guia de ferramentas](../.agents/review-tools.md)
+fora desse job. O pipeline mantém as análises determinísticas em jobs isolados.
 
 Secret ausente, erro do provedor, rede indisponível ou negação de aprovação pelo
 GitHub aparecem explicitamente no job. Reexecutar um workflow antigo reutiliza
