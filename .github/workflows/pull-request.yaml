@@ -280,6 +280,7 @@ jobs:
           echo '208a21ee4f86d604c4666aa4ae4b4a566214f540767817a53d37dc1f9c67a3a4  '"$RUNNER_TEMP/opencode.tar.gz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/opencode.tar.gz" -C "$RUNNER_TEMP/opencode"
       - name: Review diff with verification context
+        timeout-minutes: 10
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OPENCODE_CONFIG: ${{ github.workspace }}/opencode.json
@@ -289,7 +290,28 @@ jobs:
             --model opencode/big-pickle --agent code-reviewer --format json \
             --file "$RUNNER_TEMP/code-review-evidence/ci-context.json" \
             --file "$RUNNER_TEMP/code-review-evidence/pr.diff" \
-            > "$RUNNER_TEMP/review-events.jsonl"
+            < /dev/null | node -e '
+              const fs = require("fs");
+              const readline = require("readline");
+              const output = fs.createWriteStream(process.argv[1]);
+              const input = readline.createInterface({ input: process.stdin });
+              input.on("line", line => {
+                output.write(line + "\n");
+                try {
+                  const event = JSON.parse(line);
+                  const messages = {
+                    step_start: "OpenCode: analysis step started",
+                    tool_use: "OpenCode: analysis tool finished",
+                    text: "OpenCode: response received",
+                    error: "OpenCode: engine error received"
+                  };
+                  if (messages[event.type]) console.log(messages[event.type]);
+                } catch (_) {
+                  console.log("OpenCode: unexpected output captured for validation");
+                }
+              });
+              input.on("close", () => output.end());
+            ' "$RUNNER_TEMP/review-events.jsonl"
       - name: Extract structured review
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
         with:

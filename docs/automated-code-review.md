@@ -55,7 +55,9 @@ revisões duplicadas. Alterações no título do PR também disparam a validaç�
 
 O pipeline usa o OpenCode CLI **1.2.19**, instalado da release oficial com
 verificação SHA-256, e o modelo `opencode/big-pickle`. A versão é fixa para
-preservar o contrato de execução e os eventos JSON. O CLI recebe explicitamente
+preservar o contrato de execução e os eventos JSON. A execução do modelo é
+não interativa, tem limite de dez minutos e registra apenas marcos de progresso
+nos logs, sem imprimir argumentos, respostas do modelo ou conteúdo das ferramentas. O CLI recebe explicitamente
 `--agent code-reviewer`, registrado em [opencode.json](../opencode.json), com
 as regras em [code-reviewer](../.agents/agents/code-reviewer.md).
 
