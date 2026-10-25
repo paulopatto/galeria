@@ -2,8 +2,17 @@
 
 O workflow [OpenCode PR review](../.github/workflows/opencode-review.yml) usa
 `opencode/big-pickle` para revisar pull requests e publicar a resposta em um
-comentário no próprio PR. O prompt fica no campo `prompt` do workflow e a resposta
-é em português brasileiro, com foco em qualidade Ruby, Sinatra e segurança.
+comentário no próprio PR. A action seleciona `agent: code-reviewer`, registrado
+como agente primário em [opencode.json](../opencode.json), e carrega o perfil
+[code-reviewer](../.agents/agents/code-reviewer.md). O workflow contém apenas
+um prompt curto de execução; as regras ficam no agente e no
+[guia de ferramentas](../.agents/review-tools.md).
+
+O comentário é em português brasileiro: uma linha de resumo com o commit e
+somente achados acionáveis, com severidade, arquivo/linha, impacto e correção.
+Comandos, versões, limitações e evidências ficam no toggle **Detalhes da análise**.
+Achados relevantes e limitações que comprometam a conclusão permanecem visíveis.
+Se não houver achados, o agente informa isso sem gerar seções vazias.
 
 ## Configuração
 
@@ -12,7 +21,8 @@ comentário no próprio PR. O prompt fica no campo `prompt` do workflow e a resp
 2. No repositório, abra **Settings → Secrets and variables → Actions → New
    repository secret** e salve a chave como `OPENCODE_API_KEY`.
 3. Habilite GitHub Actions e permita as actions `actions/checkout` e
-   `anomalyco/opencode/github`, caso exista uma política de restrição de actions.
+   `anomalyco/opencode/github` e `actions/upload-artifact`, caso exista uma política
+   de restrição de actions.
    A política da organização também precisa permitir `pull-requests: write` e
    `issues: write`.
 4. Abra ou atualize um PR de uma branch deste repositório e confira o job
@@ -50,29 +60,27 @@ usar a automação, um mantenedor pode inspecionar a contribuição e trazê-la 
 uma branch do próprio repositório. Não use `pull_request_target` com checkout
 do código do contribuidor para contornar essa restrição.
 
-## Ruby antigo e scanners
+## Ferramentas e evidências
 
-A aplicação continua com Ruby 2.6.2 e Sinatra 2.x. Este workflow não instala o
-bundle da aplicação e não modifica suas dependências. O prompt exige sugestões
-compatíveis com a stack atual; a atualização de Ruby/Sinatra fica para outra tarefa.
+O agente tem acesso a shell e web para verificações; as ferramentas de edição e
+delegação estão desabilitadas. As permissões de shell não constituem sandbox:
+o perfil também proíbe alterar código ou executar scripts do PR com credenciais.
 
-Os scanners são auxiliares sob demanda, escolhidos pelo agente conforme o diff,
-a disponibilidade e a compatibilidade do runtime. Não são etapas obrigatórias
-nem há garantia de execução dos quatro scanners em cada PR:
+Consulte o [guia de ferramentas](../.agents/review-tools.md) para seleção,
+comandos, isolamento e limitações de Bundler-audit, Dawnscanner, Brakeman e
+RuboCop/Security. Brakeman só se aplica a Rails; os cops Security fazem parte
+do RuboCop. Ferramentas não são instaladas automaticamente e nenhum scanner é
+obrigatório em todos os PRs. O runtime da aplicação continua Ruby 2.6.2/Sinatra 2.x.
 
-| Ferramenta | Quando usar |
-| --- | --- |
-| Bundler-audit | Mudanças nas dependências; analisa `Gemfile.lock` contra advisories atualizados. |
-| Dawnscanner | Análise estática complementar de Sinatra, quando compatível. |
-| Brakeman | Somente se houver código Rails; não se aplica à aplicação Sinatra atual. |
-| RuboCop-Security | Padrões Ruby inseguros, sem autocorreção, com configuração temporária própria e alvo Ruby 2.6. |
+Playwright é opcional para uma URL de preview autorizada, quando houver mudança
+visual ou necessidade de evidência. Não se inicia a aplicação do PR no job com
+secrets. Se não houver preview ou navegador, a limitação aparece nos detalhes.
+O workflow não instala Playwright, browsers ou servidores MCP.
 
-Se necessário, o agente pode instalar ferramentas fora do bundle, em diretório
-temporário. O prompt proíbe executar a aplicação, scripts/testes do PR ou avaliar
-o Gemfile, e limita cada scanner a 120 segundos. Isso evita depender da instalação
-do Ruby legado para fazer o review. Erros de instalação, parsing, rede ou
-incompatibilidade devem aparecer como limitações; não significam ausência de
-vulnerabilidades nem devem gerar pedidos de upgrade fora do escopo do PR.
+Screenshots e relatórios pertinentes devem ser gravados em
+`$RUNNER_TEMP/code-review-evidence`. A action publica essa pasta como artefato
+`code-review-evidence-<PR>-<tentativa>`, com retenção de sete dias. Sem arquivos,
+o upload é ignorado. Nunca inclua tokens, sessões, dados pessoais ou logs completos.
 
 ## Diagnóstico e manutenção
 

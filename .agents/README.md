@@ -46,7 +46,12 @@ issues ou publique documentos externos somente quando solicitado.
 | [rspec-test-engineer](agents/rspec-test-engineer.md) | Regressão, isolamento e testes HTTP | Reprodução e testes de comportamento |
 | [code-reviewer](agents/code-reviewer.md) | Revisão de diff ou PR | Achados acionáveis com evidência |
 
-Esses perfis são prompts portáveis, não configuração nativa de agentes.
+Esses perfis são prompts portáveis. O perfil `code-reviewer` também é registrado
+como agente primário nativo do OpenCode em [opencode.json](../opencode.json),
+com shell/web habilitados para verificações e edição/delegação desabilitadas.
+Use `opencode run --agent code-reviewer "Revise o diff desta branch"` ou o workflow
+automatizado. Consulte o [guia de ferramentas](review-tools.md) para scanners e
+Playwright, e a [documentação do workflow](../docs/automated-code-review.md).
 Para usá-los, peça à ferramenta que leia o arquivo; configure qualquer agente
 nativo conforme o formato suportado por ela. Um agente único também pode
 adotar cada perfil sequencialmente. Este diretório não habilita execução

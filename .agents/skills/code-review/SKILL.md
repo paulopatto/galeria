@@ -38,7 +38,13 @@ suportada pela ferramenta.
 
 ## Relatar
 
-Liste achados por eixo, com severidade, arquivo/linha, cenário, impacto e correção
-sugerida. Não publique comentários no GitHub nem altere código quando o pedido
-for apenas revisar. Se não houver achados, diga isso e informe os limites da
-validação. Não bloqueie a entrega com preferências de estilo sem impacto.
+Use o formato do [agente code-reviewer](../../agents/code-reviewer.md#entrega):
+resumo em uma linha, problemas acionáveis com severidade, arquivo/linha, impacto
+e correção. Identifique o eixo no item sem criar seções vazias. Guarde comandos,
+versões, limitações e evidências em `<details>` com o título “Detalhes da análise”.
+Achados relevantes e limitações que comprometam a conclusão ficam visíveis.
+
+Consulte o [guia de ferramentas](../../review-tools.md) para scanners e Playwright.
+Não publique comentários no GitHub nem altere código por conta própria; no
+workflow, a action publica a resposta final. Se não houver achados, diga isso.
+Não bloqueie a entrega com preferências de estilo sem impacto.
