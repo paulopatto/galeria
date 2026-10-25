@@ -1,0 +1,641 @@
+name: Pull request pipeline
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-pipeline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: PR type
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Validate Conventional Commit title
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title;
+            const match = /^(feat|fix|chore|refactor|build|ci|docs|style|revert|test|perf)\([^()\r\n]+\)!?: \S[^\r\n]*$/.exec(title);
+            if (!match) throw new Error('Use type(context): description in the PR title.');
+            core.info(`PR type: ${match[1]}`);
+      - name: Classify PR with release-drafter
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: release-drafter/release-drafter@v6
+        with:
+          config-name: release-drafter.conf.yaml
+          disable-releaser: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  tests:
+    name: Tests
+    needs: validate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      checks: write
+    env:
+      RACK_ENV: test
+      OTEL_TRACES_EXPORTER: none
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - name: Run functional, integration and acceptance tests
+        id: rspec
+        continue-on-error: true
+        run: |
+          mkdir -p tmp/test-results
+          bundle exec rspec --format documentation --format json --out tmp/test-results/rspec.json
+      - name: Validate automated review fallback workflow
+        run: node script/verify_review_fallback.js
+      - name: Generate JUnit report
+        if: ${{ !cancelled() && hashFiles('tmp/test-results/rspec.json') != '' }}
+        run: bundle exec ruby script/rspec_to_junit.rb tmp/test-results/rspec.json tmp/test-results/rspec.xml
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-test-reports
+          path: tmp/test-results/
+          if-no-files-found: warn
+      - name: Publish all test names
+        if: >-
+          ${{ !cancelled() && hashFiles('tmp/test-results/rspec.xml') != '' &&
+              github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: dorny/test-reporter@v2
+        with:
+          name: Functional, integration and acceptance results
+          path: tmp/test-results/rspec.xml
+          reporter: java-junit
+          list-suites: all
+          list-tests: all
+          fail-on-error: false
+      - name: Enforce test result
+        if: ${{ !cancelled() && steps.rspec.outcome != 'success' }}
+        run: exit 1
+
+  sast:
+    name: SAST
+    needs: validate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Semgrep
+        run: python -m pip install --disable-pip-version-check 'semgrep==1.182.0'
+      - name: Scan Ruby code
+        id: scan
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          semgrep scan --config p/ruby --error --metrics off --disable-version-check --json --output reports/semgrep.json .
+      - name: Upload SAST report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-sast-reports
+          path: reports/semgrep.json
+          if-no-files-found: warn
+      - name: Enforce SAST result
+        if: ${{ !cancelled() && steps.scan.outcome != 'success' }}
+        run: exit 1
+
+  dependencies:
+    name: Dependencies
+    needs: validate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler: none
+      - name: Install isolated dependency scanner
+        run: gem install bundler-audit --version 0.9.2 --no-document --conservative
+      - name: Audit base and proposed lockfiles
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          mkdir -p reports "$RUNNER_TEMP/audit-base"
+          printf 'ignore: []\n' > "$RUNNER_TEMP/audit-config.yml"
+          git show "${BASE_SHA}:Gemfile.lock" > "$RUNNER_TEMP/audit-base/Gemfile.lock"
+          timeout 120 bundle-audit update
+          set +e
+          timeout 120 bundle-audit check "$RUNNER_TEMP/audit-base" --config "$RUNNER_TEMP/audit-config.yml" --format json --output reports/base-audit.json
+          base_status=$?
+          timeout 120 bundle-audit check . --config "$RUNNER_TEMP/audit-config.yml" --format json --output reports/head-audit.json
+          head_status=$?
+          set -e
+          if [ "$base_status" -gt 1 ] || [ "$head_status" -gt 1 ]; then
+            echo '::error::Dependency scanner failed or timed out.'
+            exit 1
+          fi
+      - name: Compare dependency findings
+        id: compare
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const baseline = JSON.parse(fs.readFileSync('reports/base-audit.json', 'utf8'));
+            const proposed = JSON.parse(fs.readFileSync('reports/head-audit.json', 'utf8'));
+            if (!Array.isArray(baseline.results) || !Array.isArray(proposed.results)) {
+              throw new Error('Invalid dependency scan reports.');
+            }
+            const identity = result => {
+              if (result.type === 'unpatched_gem' && result.gem?.name && result.advisory?.id) {
+                return `${result.gem.name}:${result.advisory.id}`;
+              }
+              if (result.type === 'insecure_source' && result.source) return `${result.type}:${result.source}`;
+              throw new Error('Unrecognized dependency finding.');
+            };
+            const existing = new Set(baseline.results.map(identity));
+            const introduced = proposed.results.filter(result => !existing.has(identity(result)));
+            const blocking = introduced.filter(result => result.type === 'insecure_source' ||
+              !['none', 'low'].includes(result.advisory.criticality));
+            fs.writeFileSync('reports/dependencies.json', JSON.stringify({
+              scanner: 'bundler-audit 0.9.2',
+              outcome: blocking.length ? 'failure' : 'success',
+              introduced_vulnerabilities: introduced,
+              blocking_vulnerabilities: blocking,
+              preexisting_vulnerabilities: proposed.results.filter(result => existing.has(identity(result)))
+            }, null, 2));
+            core.setOutput('blocking', String(blocking.length));
+            await core.summary.addHeading('Dependency audit delta')
+              .addRaw(`Introduced: ${introduced.length}; blocking: ${blocking.length}; pre-existing in base: ${baseline.results.length}.`).write();
+      - name: Upload dependency report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-dependency-reports
+          path: reports/*.json
+          if-no-files-found: warn
+      - name: Enforce dependency result
+        if: ${{ !cancelled() && steps.compare.outputs.blocking != '0' }}
+        run: exit 1
+
+  review:
+    name: Code review
+    needs: [validate, tests, sast, dependencies]
+    if: >-
+      ${{ always() && !cancelled() && needs.validate.result == 'success' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.actor != 'dependabot[bot]' &&
+          github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+      issues: write
+    env:
+      CODE_REVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      CODE_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+    outputs:
+      event: ${{ steps.publish.outputs.event }}
+      analysis_complete: ${{ steps.publish.outputs.analysis_complete }}
+      review_required: ${{ steps.scope.outputs.review_required }}
+      review_reason: ${{ steps.scope.outputs.review_reason }}
+    steps:
+      - name: Prepare review directories
+        run: mkdir -p "$RUNNER_TEMP/code-review-evidence" "$RUNNER_TEMP/ci-reports"
+      - name: Checkout analyzed commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download verification reports
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pr-*-reports
+          merge-multiple: true
+          path: ${{ runner.temp }}/ci-reports
+      - name: Prepare review context
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        env:
+          CI_RESULTS_JSON: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const directory = path.join(process.env.RUNNER_TEMP, 'ci-reports');
+            const results = JSON.parse(process.env.CI_RESULTS_JSON);
+            const reports = {};
+            for (const file of ['rspec.json', 'semgrep.json', 'dependencies.json']) {
+              const filename = path.join(directory, file);
+              reports[file] = fs.existsSync(filename) ? JSON.parse(fs.readFileSync(filename, 'utf8')) : { unavailable: true };
+            }
+            const testReport = reports['rspec.json'];
+            const tests = testReport.examples || [];
+            const byLocation = (a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b));
+            const scan = reports['semgrep.json'];
+            const dependency = reports['dependencies.json'];
+            const introduced = dependency.introduced_vulnerabilities || [];
+            const scanFindings = (scan.results || []).map(result => ({
+              rule: result.check_id, file: result.path, line: result.start?.line,
+              severity: result.extra?.severity, message: result.extra?.message
+            })).sort(byLocation);
+            const problems = tests.filter(test => test.status !== 'passed').map(test => ({
+              name: test.full_description, status: test.status, file: test.file_path,
+              line: test.line_number, reason: test.pending_message,
+              error: test.status === 'failed' ? test.exception?.message?.slice(0, 800) : undefined
+            })).sort(byLocation);
+            const contextReport = {
+              commit_sha: process.env.CODE_REVIEW_HEAD_SHA,
+              jobs: Object.fromEntries(['validate', 'tests', 'sast', 'dependencies'].map(name => [name, results[name]?.result || 'unavailable'])),
+              tests: {
+                total: testReport.summary?.example_count ?? null,
+                failed: testReport.summary?.failure_count ?? null,
+                pending: testReport.summary?.pending_count ?? null,
+                load_errors: testReport.summary?.errors_outside_of_examples_count ?? null,
+                problems: problems.slice(0, 10), omitted_problems: Math.max(0, problems.length - 10)
+              },
+              sast: { total: scanFindings.length, findings: scanFindings.slice(0, 10),
+                omitted_findings: Math.max(0, scanFindings.length - 10), errors: (scan.errors || []).slice(0, 5) },
+              dependencies: {
+                outcome: dependency.outcome,
+                preexisting_count: dependency.preexisting_vulnerabilities?.length ?? null,
+                introduced_count: introduced.length,
+                introduced: introduced.map(result => ({ type: result.type, gem: result.gem,
+                  advisory: result.advisory?.id, severity: result.advisory?.criticality,
+                  title: result.advisory?.title, source: result.source
+                })).sort(byLocation).slice(0, 10),
+                omitted_findings: Math.max(0, introduced.length - 10)
+              },
+              missing_reports: Object.entries(reports).filter(([, value]) => value.unavailable).map(([file]) => file)
+            };
+            fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'code-review-evidence', 'ci-context.json'), JSON.stringify(contextReport, null, 2));
+      - name: Select reviewable changes and prepare diff
+        id: scope
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execFileSync } = require('child_process');
+            const range = `${process.env.BASE_SHA}...${process.env.CODE_REVIEW_HEAD_SHA}`;
+            const changed = execFileSync('git', ['diff', '--name-only', range], { encoding: 'utf8' })
+              .split('\n').filter(Boolean);
+            const reviewable = filename =>
+              filename === 'app.rb' || filename === 'config.ru' || filename === 'Gemfile' ||
+              filename === 'Dockerfile' || filename === 'Procfile' || filename === 'Makefile' ||
+              filename === 'generate-pack.sh' || filename === 'swagger.yaml' || filename === 'opencode.json' ||
+              filename.startsWith('.github/') || filename.startsWith('.agents/agents/') ||
+              filename.startsWith('config/') || filename.startsWith('views/') ||
+              filename.startsWith('script/') || filename.startsWith('spec/') ||
+              (filename.startsWith('public/') && /\.(css|js)$/.test(filename)) ||
+              /\.(rb|ru|erb)$/.test(filename);
+            const selected = changed.filter(reviewable);
+            const changedMetadata = Object.keys(context.payload.changes || {});
+            const metadataOnly = context.payload.action === 'edited' && changedMetadata.length > 0 &&
+              changedMetadata.every(key => ['title', 'body'].includes(key));
+            const required = !metadataOnly && selected.length > 0;
+            const directory = path.join(process.env.RUNNER_TEMP, 'code-review-evidence');
+            const diff = required ? execFileSync('git', ['diff', '--no-ext-diff', range, '--', ...selected], { encoding: 'utf8' }) : '';
+            fs.writeFileSync(path.join(directory, 'pr.diff'), diff);
+            const reason = metadataOnly ? 'metadata-only' : selected.length ? 'reviewable-changes' : 'no-reviewable-files';
+            fs.writeFileSync(path.join(directory, 'review-scope.json'), JSON.stringify({
+              required, reason, changed_files: changed, reviewable_files: selected
+            }, null, 2));
+            core.setOutput('review_required', String(required));
+            core.setOutput('review_reason', reason);
+            core.info(`AI review required: ${required}; reason: ${reason}; reviewable files: ${selected.length}.`);
+      - name: Prepare bounded review and reuse previous decision
+        id: prepare
+        if: steps.scope.outputs.review_required == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const crypto = require('crypto');
+            const directory = path.join(process.env.RUNNER_TEMP, 'code-review-evidence');
+            const policy = fs.readFileSync('.agents/agents/code-reviewer.md', 'utf8');
+            const ci = JSON.parse(fs.readFileSync(path.join(directory, 'ci-context.json'), 'utf8'));
+            const diff = fs.readFileSync(path.join(directory, 'pr.diff'), 'utf8');
+            const models = [
+              'opencode/big-pickle',
+              'opencode/beam-free',
+              'opencode-go/deepseek-v4.1-flash',
+              'opencode-go/gpt-6-luna'
+            ];
+            const input = { commit_sha: process.env.CODE_REVIEW_HEAD_SHA,
+              base_sha: process.env.BASE_SHA, verification: ci, diff };
+            const request = { strategy: 'fallback-v1', models, temperature: 0, max_tokens: 2000,
+              response_format: { type: 'json_object' }, messages: [
+                { role: 'system', content: policy },
+                { role: 'user', content: JSON.stringify(input) }
+              ] };
+            const requestText = JSON.stringify(request);
+            const promptBytes = Buffer.byteLength(requestText, 'utf8');
+            if (promptBytes > 100000) throw new Error('Review input exceeds 100 KB. Split the PR or use manual review; no automatic approval.');
+            const fingerprint = crypto.createHash('sha256').update('fallback-v1\n' + requestText).digest('hex');
+            const metadata = { fingerprint, models, prompt_bytes: promptBytes,
+              diff_bytes: Buffer.byteLength(diff, 'utf8'), cache_hit: false,
+              model_steps_limit: 1, output_token_limit: 2000, action_timeout_seconds: 60 };
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              ...context.repo, pull_number: context.payload.pull_request.number, per_page: 100
+            });
+            const previous = reviews.filter(review => review.user?.login === 'github-actions[bot]' &&
+              review.commit_id === input.commit_sha).sort((a, b) => b.id - a.id)[0];
+            const marker = new RegExp('<!-- ci-review:v1:' + fingerprint + ':([A-Za-z0-9+/=]+) -->');
+            const match = previous && ['APPROVED', 'COMMENTED', 'CHANGES_REQUESTED'].includes(previous.state) && previous.body?.match(marker);
+            if (match) {
+              try {
+                const report = JSON.parse(Buffer.from(match[1], 'base64').toString('utf8'));
+                if (report.commit_sha === input.commit_sha && report.analysis_complete === true) {
+                  metadata.cache_hit = true;
+                  metadata.review_id = previous.id;
+                  metadata.review_state = previous.state;
+                  fs.writeFileSync(path.join(directory, 'decision.json'), JSON.stringify(report));
+                }
+              } catch (_) { core.warning('Previous review data is invalid; performing a fresh review.'); }
+            }
+            fs.writeFileSync(path.join(directory, 'request.json'), requestText);
+            fs.writeFileSync(path.join(directory, 'review-metadata.json'), JSON.stringify(metadata, null, 2));
+            core.setOutput('cache_hit', String(metadata.cache_hit));
+            core.setOutput('prompt', request.messages[1].content);
+            if (metadata.cache_hit) fs.writeFileSync(path.join(directory, 'usage.json'), JSON.stringify({ model_rounds: 0, cache_hit: true }));
+            core.info(`Review input: ${promptBytes} bytes; reused decision: ${metadata.cache_hit}.`);
+      - name: Install OpenCode CLI
+        if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+      - name: Review with Big Pickle
+        id: big_pickle
+        if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          REVIEW_PROMPT: ${{ steps.prepare.outputs.prompt }}
+        run: bash script/run_review_model.sh opencode/big-pickle "$RUNNER_TEMP/code-review-evidence/big-pickle.jsonl"
+      - name: Validate Big Pickle output
+        id: big_pickle_output
+        if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
+        uses: ./.github/actions/validate-review-output
+        with:
+          model: opencode/big-pickle
+          action-outcome: ${{ steps.big_pickle.outcome }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          evidence-directory: ${{ runner.temp }}/code-review-evidence
+          response-file: ${{ runner.temp }}/code-review-evidence/big-pickle.jsonl
+      - name: Review with Beam Free
+        id: beam_free
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          REVIEW_PROMPT: ${{ steps.prepare.outputs.prompt }}
+        run: bash script/run_review_model.sh opencode/beam-free "$RUNNER_TEMP/code-review-evidence/beam-free.jsonl"
+      - name: Validate Beam Free output
+        id: beam_free_output
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' }}
+        uses: ./.github/actions/validate-review-output
+        with:
+          model: opencode/beam-free
+          action-outcome: ${{ steps.beam_free.outcome }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          evidence-directory: ${{ runner.temp }}/code-review-evidence
+          response-file: ${{ runner.temp }}/code-review-evidence/beam-free.jsonl
+      - name: Review with DeepSeek V4.1 Flash
+        id: deepseek
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' && steps.beam_free_output.outputs.valid != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          REVIEW_PROMPT: ${{ steps.prepare.outputs.prompt }}
+        run: bash script/run_review_model.sh opencode-go/deepseek-v4.1-flash "$RUNNER_TEMP/code-review-evidence/deepseek-v4.1-flash.jsonl"
+      - name: Validate DeepSeek V4.1 Flash output
+        id: deepseek_output
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' && steps.beam_free_output.outputs.valid != 'true' }}
+        uses: ./.github/actions/validate-review-output
+        with:
+          model: opencode-go/deepseek-v4.1-flash
+          action-outcome: ${{ steps.deepseek.outcome }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          evidence-directory: ${{ runner.temp }}/code-review-evidence
+          response-file: ${{ runner.temp }}/code-review-evidence/deepseek-v4.1-flash.jsonl
+      - name: Review with GPT-6 Luna
+        id: gpt_luna
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' && steps.beam_free_output.outputs.valid != 'true' &&
+              steps.deepseek_output.outputs.valid != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          REVIEW_PROMPT: ${{ steps.prepare.outputs.prompt }}
+        run: bash script/run_review_model.sh opencode-go/gpt-6-luna "$RUNNER_TEMP/code-review-evidence/gpt-6-luna.jsonl"
+      - name: Validate GPT-6 Luna output
+        id: gpt_luna_output
+        if: >-
+          ${{ steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true' &&
+              steps.big_pickle_output.outputs.valid != 'true' && steps.beam_free_output.outputs.valid != 'true' &&
+              steps.deepseek_output.outputs.valid != 'true' }}
+        uses: ./.github/actions/validate-review-output
+        with:
+          model: opencode-go/gpt-6-luna
+          action-outcome: ${{ steps.gpt_luna.outcome }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          evidence-directory: ${{ runner.temp }}/code-review-evidence
+          response-file: ${{ runner.temp }}/code-review-evidence/gpt-6-luna.jsonl
+      - name: Require one valid review decision
+        if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const directory = path.join(process.env.RUNNER_TEMP, 'code-review-evidence');
+            if (!fs.existsSync(path.join(directory, 'selected-candidate.json'))) {
+              throw new Error('No fallback model produced a valid structured review. No approval was sent.');
+            }
+      - name: Select published review source
+        id: source
+        if: steps.scope.outputs.review_required == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const directory = path.join(process.env.RUNNER_TEMP, 'code-review-evidence');
+            const metadataPath = path.join(directory, 'review-metadata.json');
+            const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+            if (metadata.cache_hit) {
+              metadata.selected_model = 'cache';
+              fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+              return;
+            }
+            const selected = JSON.parse(fs.readFileSync(path.join(directory, 'selected-candidate.json'), 'utf8'));
+            metadata.selected_model = selected.model;
+            fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+            core.setOutput('comment_id', String(selected.comment_id));
+      - name: Ensure review did not modify tracked files
+        if: steps.scope.outputs.review_required == 'true' && steps.prepare.outputs.cache_hit != 'true'
+        run: git diff --exit-code
+      - name: Publish formal review decision
+        id: publish
+        if: steps.scope.outputs.review_required == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        env:
+          CODE_REVIEW_DECISION_PATH: ${{ runner.temp }}/code-review-evidence/decision.json
+          CI_RESULTS_JSON: ${{ toJSON(needs) }}
+          REVIEW_COMMENT_ID: ${{ steps.source.outputs.comment_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync(process.env.CODE_REVIEW_DECISION_PATH, 'utf8'));
+            const expectedSha = context.payload.pull_request.head.sha;
+            const severities = ['critical', 'high', 'medium', 'low'];
+            const nonempty = value => typeof value === 'string' && value.trim().length > 0;
+            if (report.commit_sha !== expectedSha || typeof report.analysis_complete !== 'boolean' ||
+                !nonempty(report.summary) || !Array.isArray(report.findings)) {
+              throw new Error('Missing or invalid structured review for the expected commit. No approval was sent.');
+            }
+            for (const finding of report.findings) {
+              if (!finding || !severities.includes(finding.severity) ||
+                  !['title', 'file', 'impact', 'correction'].every(key => nonempty(finding[key])) ||
+                  !Number.isInteger(finding.line) || finding.line < 1) {
+                throw new Error('Invalid finding in structured review. No approval was sent.');
+              }
+            }
+            const params = { ...context.repo, pull_number: context.payload.pull_request.number };
+            const { data: pr } = await github.rest.pulls.get(params);
+            if (pr.head.sha !== expectedSha || pr.state !== 'open') {
+              core.notice('Skipping stale review: the pull request changed or was closed during analysis.');
+              return;
+            }
+            const blocking = report.findings.some(finding => ['critical', 'high'].includes(finding.severity));
+            const medium = report.findings.some(finding => finding.severity === 'medium');
+            let event = blocking ? 'REQUEST_CHANGES' :
+              (!report.analysis_complete || medium ? 'COMMENT' : 'APPROVE');
+            const notes = [];
+            const ciResults = JSON.parse(process.env.CI_RESULTS_JSON || '{}');
+            const failedChecks = ['tests', 'sast', 'dependencies'].filter(name => ciResults[name]?.result !== 'success');
+            const ciContext = JSON.parse(fs.readFileSync(require('path').join(process.env.RUNNER_TEMP, 'code-review-evidence', 'ci-context.json'), 'utf8'));
+            if (ciContext.missing_reports.length) failedChecks.push('missing-reports');
+            if (failedChecks.length) {
+              if (event === 'APPROVE') event = 'COMMENT';
+              notes.push(`Verificações sem sucesso: ${failedChecks.join(', ')}. Aprovação não publicada.`);
+            }
+            if (!report.analysis_complete) notes.push('Análise incompleta: veja a limitação no resumo.');
+            if (pr.draft && event === 'APPROVE') {
+              event = 'COMMENT';
+              notes.push('PR em draft: aprovação adiada até estar pronto para revisão.');
+            }
+            const labels = { critical: 'CRÍTICA', high: 'ALTA', medium: 'MÉDIA', low: 'BAIXA' };
+            const decisions = { REQUEST_CHANGES: 'Solicitar alterações', COMMENT: 'Comentar', APPROVE: 'Aprovar' };
+            const findings = report.findings.map(finding =>
+              `- **[${labels[finding.severity]}] ${finding.title} — ${finding.file}:${finding.line}**\n` +
+              `  Impacto: ${finding.impact}\n  Correção: ${finding.correction}`);
+            const body = [report.summary, `Commit analisado: ${expectedSha}. Decisão: ${decisions[event]}.`,
+              ...notes, ...findings, ...(nonempty(report.details) ? [`<details>\n<summary>Detalhes da análise</summary>\n\n${report.details}\n\n</details>`] : [])].join('\n\n');
+            const metadata = JSON.parse(fs.readFileSync(require('path').join(process.env.RUNNER_TEMP, 'code-review-evidence', 'review-metadata.json'), 'utf8'));
+            const states = { APPROVE: 'APPROVED', COMMENT: 'COMMENTED', REQUEST_CHANGES: 'CHANGES_REQUESTED' };
+            if (!metadata.cache_hit || metadata.review_state !== states[event]) {
+              const marker = `<!-- ci-review:v1:${metadata.fingerprint}:${Buffer.from(JSON.stringify(report)).toString('base64')} -->`;
+              await github.rest.pulls.createReview({ ...params, commit_id: expectedSha, event, body: body + '\n\n' + marker });
+              core.info(`Formal review submitted: ${event} for ${expectedSha}`);
+            } else {
+              core.info(`Reused review ${metadata.review_id}; no model call or duplicate review.`);
+            }
+            if (process.env.REVIEW_COMMENT_ID) {
+              try {
+                await github.rest.issues.deleteComment({ ...context.repo, comment_id: Number(process.env.REVIEW_COMMENT_ID) });
+              } catch (_) { core.warning('Formal review published; temporary comment cleanup failed.'); }
+            }
+            core.setOutput('event', event);
+            core.setOutput('analysis_complete', String(report.analysis_complete));
+      - name: Record skipped AI review
+        if: steps.scope.outputs.review_required != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            await core.summary.addHeading('Automated code review')
+              .addRaw(`Not required: ${process.env.REVIEW_REASON}.`).write();
+        env:
+          REVIEW_REASON: ${{ steps.scope.outputs.review_reason }}
+      - name: Upload review evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: code-review-evidence-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/code-review-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
+  gate:
+    name: PR gate
+    needs: [validate, tests, sast, dependencies, review]
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate verification and review results
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        env:
+          RESULTS_JSON: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const results = JSON.parse(process.env.RESULTS_JSON);
+            const required = ['validate', 'tests', 'sast', 'dependencies'];
+            const failed = required.filter(name => results[name].result !== 'success');
+            const pr = context.payload.pull_request;
+            const reviewExpected = pr.head.repo.full_name === context.repo.owner + '/' + context.repo.repo &&
+              context.actor !== 'dependabot[bot]' && pr.user.login !== 'dependabot[bot]';
+            const reviewRequired = results.review.outputs.review_required === 'true';
+            if (reviewExpected && reviewRequired && (results.review.result !== 'success' ||
+                results.review.outputs.analysis_complete !== 'true' ||
+                !['APPROVE', 'COMMENT'].includes(results.review.outputs.event))) {
+              failed.push('review');
+            }
+            await core.summary.addHeading('Pull request pipeline').addTable([
+              [{ data: 'Stage', header: true }, { data: 'Result', header: true }],
+              ...Object.entries(results).map(([name, value]) => [name, value.result])
+            ]).addRaw(!reviewExpected ? '\nAutomated review unavailable for forks/Dependabot; manual review is required.\n' :
+              (reviewRequired ? '' : `\nAutomated review not required: ${results.review.outputs.review_reason}.\n`)).write();
+            if (failed.length) core.setFailed(`PR blocked by: ${failed.join(', ')}`);

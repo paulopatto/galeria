@@ -1,0 +1,72 @@
+name: Validate automated review output
+description: Selects one valid structured OpenCode response for the current workflow run.
+inputs:
+  model:
+    description: Model used for this attempt.
+    required: true
+  action-outcome:
+    description: GitHub Actions outcome of the model step.
+    required: true
+  head-sha:
+    description: Pull request commit being reviewed.
+    required: true
+  evidence-directory:
+    description: Directory used for workflow evidence.
+    required: true
+  response-file:
+    description: JSON event output produced by opencode run.
+    required: false
+outputs:
+  valid:
+    description: Whether this attempt produced a valid structured review.
+    value: ${{ steps.validate.outputs.valid }}
+  comment-id:
+    description: Temporary comment containing the valid response.
+    value: ${{ steps.validate.outputs.comment_id }}
+  reason:
+    description: Why the next fallback is or is not needed.
+    value: ${{ steps.validate.outputs.reason }}
+runs:
+  using: composite
+  steps:
+    - id: validate
+      uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+      env:
+        REVIEW_MODEL: ${{ inputs.model }}
+        REVIEW_ACTION_OUTCOME: ${{ inputs.action-outcome }}
+        REVIEW_HEAD_SHA: ${{ inputs.head-sha }}
+        REVIEW_EVIDENCE_DIRECTORY: ${{ inputs.evidence-directory }}
+        REVIEW_RESPONSE_FILE: ${{ inputs.response-file }}
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          const directory = process.env.REVIEW_EVIDENCE_DIRECTORY;
+          const expectedSha = process.env.REVIEW_HEAD_SHA;
+          const { selectReview, selectResponse } = require(path.join(process.env.GITHUB_WORKSPACE, 'script/review_output_validator'));
+          const selected = process.env.REVIEW_RESPONSE_FILE && fs.existsSync(process.env.REVIEW_RESPONSE_FILE) ?
+            selectResponse(fs.readFileSync(process.env.REVIEW_RESPONSE_FILE, 'utf8'), expectedSha) :
+            selectReview(await github.paginate(github.rest.issues.listComments, {
+              ...context.repo, issue_number: context.payload.pull_request.number, per_page: 100
+            }), process.env.GITHUB_RUN_ID, expectedSha);
+          for (const commentId of selected.invalidCommentIds) {
+            await github.rest.issues.deleteComment({ ...context.repo, comment_id: commentId });
+          }
+          const attemptsPath = path.join(directory, 'attempts.json');
+          const attempts = fs.existsSync(attemptsPath) ? JSON.parse(fs.readFileSync(attemptsPath, 'utf8')) : [];
+          const attempt = { model: process.env.REVIEW_MODEL, action_outcome: process.env.REVIEW_ACTION_OUTCOME,
+            valid: Boolean(selected.report), reason: selected.reason,
+            discarded_comment_ids: selected.invalidCommentIds };
+          if (selected.report) {
+            if (selected.comment) attempt.comment_id = selected.comment.id;
+            fs.writeFileSync(path.join(directory, 'decision.json'), JSON.stringify(selected.report, null, 2));
+            fs.writeFileSync(path.join(directory, 'selected-candidate.json'), JSON.stringify({
+              model: process.env.REVIEW_MODEL, comment_id: selected.comment?.id || null
+            }, null, 2));
+          }
+          attempts.push(attempt);
+          fs.writeFileSync(attemptsPath, JSON.stringify(attempts, null, 2));
+          core.setOutput('valid', String(Boolean(selected.report)));
+          core.setOutput('comment_id', selected.comment ? String(selected.comment.id) : '');
+          core.setOutput('reason', attempt.reason);
+          core.info(`${process.env.REVIEW_MODEL}: ${attempt.reason}.`);

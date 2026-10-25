@@ -31,7 +31,9 @@ get '/' do
 end
 
 get '/photo/:id' do
-  @image = images.select { |img| img[:id] == params[:id].to_i }.first
+  halt 404, 'Image not found' unless params[:id].match?(/\A[1-9]\d*\z/)
+  @image = images.find { |img| img[:id] == params[:id].to_i }
+  halt 404, 'Image not found' unless @image
   erb :single
 end
 

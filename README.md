@@ -106,3 +106,64 @@ xcode-select --install
 clang --version
 make --version
 ```
+
+## Testes funcionais, de integração e de aceitação
+
+A suíte usa RSpec e Rack::Test, já presentes no projeto, sem novas gems. Não há
+testes unitários: as requisições atravessam Sinatra, templates e middlewares reais.
+
+```bash
+bundle install
+bundle exec rspec
+```
+
+- `spec/requests`: respostas HTTP, criação e listagem de fotos, detalhe, IDs
+  inválidos, CSS, documentação e contrato OpenAPI.
+- `spec/features`: jornadas de visitante pelo formulário, links, redirecionamentos
+  e retorno à galeria, exercitadas pela interface HTTP.
+- `spec/integration`: spans da pilha HTTP, propagação de contexto, status de erro
+  e exportação OTLP para um coletor HTTP local simulado, com respostas 200 e 400.
+
+Cada cenário começa com uma coleção vazia e contador reiniciado, recarregando
+as rotas que guardam o estado em memória. A ordem dos testes é aleatória; para
+reproduzir uma execução, use `bundle exec rspec --seed NUMERO`.
+
+O ambiente `test` é definido antes de carregar a aplicação. A exportação automática
+para serviços externos é desativada, e um exporter em memória recebe os spans reais.
+O transporte Net::HTTP é bloqueado para destinos externos. O coletor simulado usa
+WEBrick na interface loopback, com porta aleatória e encerramento após cada teste.
+Os testes verificam o payload protobuf realmente enviado pelo exporter OTLP,
+incluindo compressão, sem credenciais nem acesso a um coletor externo.
+
+O servidor apenas renderiza as URLs do Unsplash; ele não baixa as imagens.
+Rack::Test não executa JavaScript nem baixa imagens, fontes ou scripts do Swagger UI.
+Esses recursos são verificados no HTML, sem consultar terceiros. Não são necessárias
+cassettes VCR. Validação visual e execução em navegador real não fazem parte da suíte.
+
+Há uma pendência explícita no cenário de propagação de `traceparent` com Ruby 2.6.2
+e `opentelemetry-common` 0.19.7: o getter da dependência tenta modificar uma string
+congelada. O cenário usa `pending` e continua executando as asserções: uma correção
+que faça o cenário passar exige remover a marcação de pendência.
+
+### Relatório no CI
+
+O [pipeline de pull requests](.github/workflows/pull-request.yaml) valida o tipo
+do PR e executa testes, SAST e análise de dependências em paralelo. O code review
+automatizado recebe todos os resultados antes de publicar sua decisão formal.
+O check **PR gate** consolida as etapas e deve ser o único obrigatório no ruleset.
+Veja a [sequência, política de review e configuração](docs/automated-code-review.md).
+
+Os testes mostram o nome de cada cenário nos logs e no Dorny. O JSON nativo do
+RSpec é convertido para JUnit por `script/rspec_to_junit.rb`, usando apenas a
+biblioteca padrão do Ruby. Os relatórios ficam disponíveis como artefatos mesmo
+quando testes falham. PRs de forks recebem os artefatos; a publicação de Checks
+pelo Dorny usa token de escrita somente em PRs do próprio repositório.
+O workflow de testes também continua no push da `master` e por acionamento manual.
+
+Para gerar os relatórios localmente (execute a conversão mesmo se houver falhas):
+
+```bash
+mkdir -p tmp/test-results
+bundle exec rspec --format documentation --format json --out tmp/test-results/rspec.json
+bundle exec ruby script/rspec_to_junit.rb tmp/test-results/rspec.json tmp/test-results/rspec.xml
+```
