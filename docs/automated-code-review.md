@@ -72,7 +72,9 @@ O [perfil curto](../.agents/agents/code-reviewer.md) recebe o diff e o resumo do
 CI. Em [opencode.json](../opencode.json), `steps: 1` limita o agente a uma rodada
 de análise, todas as ferramentas estão desativadas e nenhuma permissão de
 shell, leitura adicional, navegação, edição ou delegação é concedida. O agente
-não repete scanners nem consome comentários anteriores como evidência.
+não repete scanners nem consome comentários anteriores como evidência. O esforço
+de raciocínio fica em `low` para reservar tokens ao JSON final nos modelos com
+raciocínio interno.
 
 - **Uma rodada do agente principal**, sem ciclos de ferramentas.
 - **Um minuto por modelo e cinco minutos para o job inteiro**, sem retries do

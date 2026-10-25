@@ -5,6 +5,7 @@ const { selectReview, selectResponse } = require('./review_output_validator');
 
 const root = path.join(__dirname, '..');
 const workflow = fs.readFileSync(path.join(root, '.github/workflows/pull-request.yaml'), 'utf8');
+const openCodeConfig = JSON.parse(fs.readFileSync(path.join(root, 'opencode.json'), 'utf8'));
 const models = [...workflow.matchAll(/run: bash script\/run_review_model\.sh (opencode(?:-go)?\/[^\s]+)/g)]
   .map(match => match[1]);
 assert.deepStrictEqual(models, [
@@ -19,6 +20,7 @@ assert(workflow.includes('id: scope'));
 assert(workflow.includes('Require one valid review decision'));
 assert(workflow.includes("steps.scope.outputs.review_required == 'true'"));
 assert(workflow.includes('Install OpenCode CLI'));
+assert.strictEqual(openCodeConfig.agent['code-reviewer'].reasoningEffort, 'low');
 
 const runId = '123';
 const sha = 'abc';
